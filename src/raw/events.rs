@@ -117,6 +117,10 @@ impl RawEvent {
     pub const fn abs_mt_position_y(y: i32) -> Self {
         Self::new(EV_ABS, ABS_MT_POSITION_Y, y)
     }
+
+    pub const fn abs_mt_tool_type(tool_type: i32) -> Self {
+        Self::new(EV_ABS, ABS_MT_TOOL_TYPE, tool_type)
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

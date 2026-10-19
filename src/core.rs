@@ -2,13 +2,14 @@
 //!
 //! Read frame.rs first: it resolves tool types for a whole frame, then routes
 //! events and finalizes new contacts. routing.rs decides ownership; contact.rs
-//! classifies releases; sliders.rs emits during motion; taps.rs can defer a
-//! released tap until an input-time deadline.
+//! classifies releases; sliders.rs emits once the frame is routed; taps.rs can
+//! defer a released tap until an input-time deadline.
 //!
 //! Split Engine impls share the private state below. Keep cross-module helpers
 //! scoped to core so the file layout does not become part of the public API.
 
 use std::collections::BTreeSet;
+use std::time::Duration;
 
 mod contact;
 mod frame;
@@ -23,8 +24,9 @@ pub use types::{
     AxisRange, Capabilities, EdgeWidths, EngineOptions, Event, FrameOutput, Gesture,
     GestureDirection, ResyncContact, SliderAxis, SliderDirection, SliderSpec, SliderStep,
     SlotError, Zone, ZoneSet, DEFAULT_DOUBLE_TAP_MAX_DISTANCE, DEFAULT_DOUBLE_TAP_TIMEOUT_MS,
-    DEFAULT_PALM_REJECTION, DEFAULT_SWIPE_MIN_DISTANCE, DEFAULT_TAP_MAX_DURATION_MS,
-    DEFAULT_TAP_MIN_DURATION_MS, MT_TOOL_PALM,
+    DEFAULT_PALM_REJECTION, DEFAULT_SIDE_EDGE_TOP_DEAD_ZONE, DEFAULT_SLIDER_DELAY_MS,
+    DEFAULT_SWIPE_MIN_DISTANCE, DEFAULT_TAP_MAX_DURATION_MS, DEFAULT_TAP_MIN_DURATION_MS,
+    DEFAULT_TYPING_LOCKOUT_MS, MT_TOOL_PALM,
 };
 
 use contact::{Contact, ContactPhase, Ownership};
@@ -48,6 +50,7 @@ pub struct Engine {
     current_slot: i32,
     slots: Vec<SlotState>,
     pending_tap: Option<PendingTap>,
+    last_key_press: Option<Duration>,
 }
 
 impl Engine {
@@ -69,6 +72,7 @@ impl Engine {
             pressed_physical_buttons: BTreeSet::new(),
             slots: vec![SlotState::default(); slot_count],
             pending_tap: None,
+            last_key_press: None,
         }
     }
 
@@ -108,6 +112,11 @@ impl Engine {
         self.edges = edges;
         self.sliders = sliders;
         self.options = options;
+    }
+
+    /// Use the same time domain as the touchpad frames.
+    pub fn record_key_press(&mut self, timestamp: Duration) {
+        self.last_key_press = self.last_key_press.max(Some(timestamp));
     }
 
     pub(crate) fn seed_slot_snapshots(
@@ -208,5 +217,9 @@ fn validate_engine_options(options: EngineOptions) {
             && options.double_tap_max_distance > 0.0
             && options.double_tap_max_distance <= 1.0,
         "double-tap distance must be > 0 and <= 1"
+    );
+    assert!(
+        (0.0..1.0).contains(&options.side_edge_top_dead_zone),
+        "side-edge top dead zone must be >= 0 and < 1"
     );
 }

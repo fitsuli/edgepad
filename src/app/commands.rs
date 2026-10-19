@@ -162,6 +162,7 @@ pub(super) fn proxy(args: &ProxyArgs) -> Result<(), String> {
     print_recognition_profile(&profile);
     let summary = run_proxy(&ProxyRunConfig {
         device_path: device,
+        input_root: args.input_root.clone(),
         limit: ProxyRunLimit::Frames {
             frame_boundaries: args.frames,
             stop_after_limit: match args.mode() {

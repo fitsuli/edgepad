@@ -2,10 +2,10 @@ use std::fs;
 use std::io;
 use std::os::fd::{AsRawFd, RawFd};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, UNIX_EPOCH};
 
 use evdev::raw_stream::RawDevice;
-use evdev::{AbsoluteAxisCode, Device, KeyCode, PropType};
+use evdev::{AbsoluteAxisCode, Device, EventType, InputEvent, KeyCode, PropType};
 
 use crate::core::Capabilities;
 use crate::raw::ABS_MT_TRACKING_ID;
@@ -115,6 +115,85 @@ pub fn discover_device_report(input_root: &Path) -> io::Result<DiscoveryReport> 
         event_node_count,
         unreadable_count,
     })
+}
+
+/// Reads keyboards without grabbing them, for the typing lockout. Only the time
+/// of the latest key press leaves this type; key codes are never kept.
+#[derive(Default)]
+pub struct KeyboardMonitor {
+    input_root: PathBuf,
+    keyboards: Vec<RawDevice>,
+}
+
+impl KeyboardMonitor {
+    pub fn new(input_root: PathBuf, typing_lockout: Duration) -> Self {
+        let mut monitor = Self {
+            input_root,
+            keyboards: Vec::new(),
+        };
+        monitor.reconfigure(typing_lockout);
+        monitor
+    }
+
+    /// A zero lockout closes every keyboard and opens none.
+    pub fn reconfigure(&mut self, typing_lockout: Duration) {
+        self.keyboards = if typing_lockout.is_zero() {
+            Vec::new()
+        } else {
+            event_device_paths(&self.input_root)
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|path| RawDevice::open(path).ok())
+                .filter(|device| {
+                    is_typing_keyboard(device.name().unwrap_or_default(), device.supported_keys())
+                })
+                .collect()
+        };
+    }
+
+    pub fn names(&self) -> Vec<String> {
+        self.keyboards
+            .iter()
+            .map(|device| device.name().unwrap_or("unknown").to_string())
+            .collect()
+    }
+
+    /// Drains queued events without blocking. A keyboard that fails to read,
+    /// such as one that was unplugged, is dropped.
+    pub fn latest_press(&mut self) -> Option<Duration> {
+        let mut latest = None;
+        self.keyboards
+            .retain_mut(|device| match latest_queued_press(device) {
+                Ok(pressed_at) => {
+                    latest = latest.max(pressed_at);
+                    true
+                }
+                Err(_) => false,
+            });
+        latest
+    }
+}
+
+fn latest_queued_press(device: &mut RawDevice) -> io::Result<Option<Duration>> {
+    let mut latest = None;
+    while wait_for_raw_device_events(device, Duration::ZERO)? {
+        latest = latest.max(latest_press_at(device.fetch_events()?));
+    }
+    Ok(latest)
+}
+
+fn latest_press_at(events: impl IntoIterator<Item = InputEvent>) -> Option<Duration> {
+    events
+        .into_iter()
+        .filter(|event| event.event_type() == EventType::KEY && event.value() != 0)
+        .filter_map(|event| event.timestamp().duration_since(UNIX_EPOCH).ok())
+        .max()
+}
+
+// edgepad-keys, the slider's own virtual keyboard, lacks letter keys, but skip
+// edgepad devices by name too so a slide can never lock out the next one.
+fn is_typing_keyboard(name: &str, keys: Option<&evdev::AttributeSetRef<KeyCode>>) -> bool {
+    !name.starts_with("edgepad") && keys.is_some_and(|keys| keys.contains(KeyCode::KEY_A))
 }
 
 pub fn wait_for_raw_device_events(device: &RawDevice, timeout: Duration) -> io::Result<bool> {
@@ -305,6 +384,48 @@ mod tests {
             wait_for_fd_readable(reader.as_raw_fd(), Duration::from_millis(100))
                 .expect("readable socket should be polled")
         );
+    }
+
+    #[test]
+    fn typing_lockout_reads_letter_keyboards_but_not_edgepad_devices() {
+        let mut letters = evdev::AttributeSet::<KeyCode>::new();
+        letters.insert(KeyCode::KEY_A);
+        let mut media = evdev::AttributeSet::<KeyCode>::new();
+        media.insert(KeyCode::KEY_VOLUMEUP);
+
+        assert!(is_typing_keyboard(
+            "AT Translated Set 2 keyboard",
+            Some(&letters)
+        ));
+        assert!(!is_typing_keyboard("edgepad-keys", Some(&letters)));
+        assert!(!is_typing_keyboard("Asus WMI hotkeys", Some(&media)));
+        assert!(!is_typing_keyboard("Power Button", None));
+    }
+
+    #[test]
+    fn typing_lockout_keeps_only_the_latest_press_time() {
+        let event = |sec, type_: EventType, value| {
+            InputEvent::from(libc::input_event {
+                time: libc::timeval {
+                    tv_sec: sec,
+                    tv_usec: 0,
+                },
+                type_: type_.0,
+                code: KeyCode::KEY_A.0,
+                value,
+            })
+        };
+
+        assert_eq!(
+            latest_press_at([
+                event(10, EventType::KEY, 1),
+                event(11, EventType::KEY, 2),
+                event(12, EventType::KEY, 0),
+                event(13, EventType::MISC, 1),
+            ]),
+            Some(Duration::from_secs(11))
+        );
+        assert_eq!(latest_press_at([event(12, EventType::KEY, 0)]), None);
     }
 
     #[test]

@@ -184,3 +184,13 @@ fn a_release_at_the_drain_deadline_waits_for_tap_recognition() {
     assert_eq!(h.handler.gestures.len(), 1);
     assert!(!h.session.into_stats().idle_drain_timed_out);
 }
+
+#[test]
+fn idle_daemon_session_wakes_every_100_ms_so_keyboard_queues_drain() {
+    let limit = ProxyRunLimit::UntilStopped {
+        stop: StopToken::new(),
+        idle_drain_timeout: Duration::from_millis(1000),
+    };
+    let h = Harness::new(session_config(EngineOptions::default()), &limit);
+    assert_eq!(h.timeout(0), Some(Duration::from_millis(100)));
+}

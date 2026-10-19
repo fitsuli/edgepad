@@ -8,6 +8,7 @@ fn missing_device_config(mode: ProxyMode) -> ProxyRunConfig {
     ProxyRunConfig {
         device_path: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("target/edgepad-missing-error-test-device/event0"),
+        input_root: PathBuf::from("/dev/input"),
         limit: ProxyRunLimit::Frames {
             frame_boundaries: 1,
             stop_after_limit: StopAfterFrameLimit::Immediately,

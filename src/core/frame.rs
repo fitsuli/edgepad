@@ -133,6 +133,16 @@ impl Engine {
         if let Some(timestamp) = timestamp {
             self.expire_pending_tap(timestamp, &mut output);
         }
+        // A finger lifting in this frame was still down when its new contacts landed.
+        let down_at_frame_start = self
+            .slots
+            .iter()
+            .map(|slot| {
+                slot.contact
+                    .as_ref()
+                    .is_some_and(|contact| !contact.gesture_rejected)
+            })
+            .collect::<Vec<_>>();
 
         for event in frame.iter().copied() {
             match event {
@@ -151,16 +161,22 @@ impl Engine {
                         .get(&(slot, tracking_id))
                         .copied()
                         .unwrap_or_default();
+                    let index = self.slot_index(slot)?;
                     let another_contact_active = self
                         .slots
                         .iter()
                         .filter_map(|slot| slot.contact.as_ref())
-                        .any(|contact| !contact.gesture_rejected);
+                        .any(|contact| !contact.gesture_rejected)
+                        || down_at_frame_start
+                            .iter()
+                            .enumerate()
+                            .any(|(other, down)| *down && other != index);
                     let mut contact = Contact::new(
                         tracking_id,
                         timestamp,
                         !another_contact_active && !tool.is_palm(),
                     );
+                    contact.overlapped_other_contact = another_contact_active;
                     if tool.is_palm() {
                         contact.reject_gestures();
                     }
@@ -177,8 +193,11 @@ impl Engine {
                         {
                             contact.tap_sequence_eligible = false;
                             contact.tap_sequence_match = false;
+                            contact.overlapped_other_contact = true;
                         }
                         self.flush_pending_tap(&mut output);
+                        // A second finger turns an edge contact into part of a scroll.
+                        output.passthrough.extend(self.promote_claimed_contacts());
                     }
                 }
                 Event::TrackingId(_) => {
@@ -244,11 +263,22 @@ impl Engine {
                 .is_some_and(|contact| contact.began_in_frame)
             {
                 self.decide_ownership_if_ready(&mut output)?;
-                self.emit_slider_steps_if_ready(&mut output)?;
             }
         }
 
         self.finalize_contacts_started_in_frame(&mut output)?;
+        // Step only after the whole frame, so a palm flag or second finger later
+        // in the frame still takes the contact away first. This also releases
+        // delayed steps on a frame that carries no motion.
+        for slot in self.caps.slot_min..=self.caps.slot_max {
+            if self.slid_off_axis_before_first_step(slot)? {
+                output
+                    .passthrough
+                    .extend(self.promote_claimed_contact(slot)?);
+            } else {
+                self.emit_slider_steps_if_ready(slot, timestamp, &mut output)?;
+            }
+        }
 
         Ok(output)
     }

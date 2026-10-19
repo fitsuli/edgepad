@@ -20,6 +20,7 @@ fn recognition_reload_waits_for_idle_and_preserves_button_state() {
         slider_specs: Vec::new(),
         initial_slot_snapshots: Vec::new(),
         buttonpad: true,
+        input_root: PathBuf::new(),
     };
     let mut engine = Engine::new(capabilities, config.edge_widths);
     engine
@@ -48,7 +49,8 @@ fn recognition_reload_waits_for_idle_and_preserves_button_state() {
     assert!(!apply_pending_recognition_reload(
         &mut engine,
         true,
-        &mut handler
+        &mut handler,
+        &mut KeyboardMonitor::default(),
     ));
     assert_eq!(handler.reload_polls, 0);
     assert!(handler.pending.is_some());
@@ -56,7 +58,8 @@ fn recognition_reload_waits_for_idle_and_preserves_button_state() {
     assert!(apply_pending_recognition_reload(
         &mut engine,
         false,
-        &mut handler
+        &mut handler,
+        &mut KeyboardMonitor::default(),
     ));
     assert_eq!(handler.reload_polls, 1);
     assert!(handler.pending.is_none());
@@ -89,6 +92,7 @@ fn recognition_reload_waits_for_pending_tap_deadline() {
         slider_specs: Vec::new(),
         initial_slot_snapshots: Vec::new(),
         buttonpad: false,
+        input_root: PathBuf::new(),
     };
     let mut engine = Engine::with_options(
         capabilities,
@@ -129,7 +133,8 @@ fn recognition_reload_waits_for_pending_tap_deadline() {
     assert!(!apply_pending_recognition_reload(
         &mut engine,
         false,
-        &mut handler
+        &mut handler,
+        &mut KeyboardMonitor::default(),
     ));
     assert_eq!(handler.reload_polls, 0);
 
@@ -137,7 +142,8 @@ fn recognition_reload_waits_for_pending_tap_deadline() {
     assert!(apply_pending_recognition_reload(
         &mut engine,
         false,
-        &mut handler
+        &mut handler,
+        &mut KeyboardMonitor::default(),
     ));
     assert_eq!(handler.reload_polls, 1);
 }
@@ -276,6 +282,7 @@ fn session_config(options: EngineOptions) -> SessionConfig {
         slider_specs: Vec::new(),
         initial_slot_snapshots: Vec::new(),
         buttonpad: false,
+        input_root: PathBuf::new(),
     }
 }
 

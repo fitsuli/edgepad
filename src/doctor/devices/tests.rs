@@ -111,3 +111,16 @@ fn failed_input_access_does_not_skip_the_uinput_probe() {
         ],
     );
 }
+
+#[test]
+fn keyboard_check_reports_disabled_lockout_and_missing_keyboard_access() {
+    let empty = crate::doctor::test_support::TestDir::new();
+
+    let disabled = check_keyboards(0, empty.path());
+    let unreadable = check_keyboards(300, empty.path());
+
+    assert_eq!(disabled.status, CheckStatus::Ok);
+    assert!(disabled.detail.contains("disabled"));
+    assert_eq!(unreadable.status, CheckStatus::Warn);
+    assert!(unreadable.detail.contains("no read access to any keyboard"));
+}

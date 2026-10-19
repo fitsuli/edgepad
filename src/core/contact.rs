@@ -39,6 +39,9 @@ pub(super) struct Contact {
     // Eligibility permits double-tap pairing; a match identifies the second contact.
     pub(super) tap_sequence_eligible: bool,
     pub(super) tap_sequence_match: bool,
+    // Edge gestures are one-finger only, so a contact that lands while another
+    // finger is down always passes through.
+    pub(super) overlapped_other_contact: bool,
     pub(super) slider_anchor: Option<f32>,
 }
 
@@ -70,6 +73,7 @@ impl Contact {
             started_at,
             tap_sequence_eligible: sequence_eligible,
             tap_sequence_match: false,
+            overlapped_other_contact: false,
             slider_anchor: None,
         }
     }
@@ -138,7 +142,6 @@ impl Engine {
             if self.slots[index].finalize_new_contact() {
                 self.current_slot = slot_number;
                 self.decide_ownership_if_ready(output)?;
-                self.emit_slider_steps_if_ready(output)?;
             }
         }
         self.current_slot = previous_slot;
@@ -152,6 +155,10 @@ impl Engine {
         output: &mut FrameOutput,
     ) -> Result<(), SlotError> {
         let slot = self.current_slot;
+        // A finger that lifts inside the slider delay was still a real slide.
+        if !self.slid_off_axis_before_first_step(slot)? {
+            self.emit_slider_steps_if_ready(slot, None, output)?;
+        }
         let Some(contact) = self.slot_mut(slot)?.take_contact() else {
             self.slot_mut(slot)?.held_events.push(event);
             return Ok(());

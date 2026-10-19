@@ -1,5 +1,5 @@
-# Slot 0 starts on the left edge and is claimed.
-# Slot 1 starts in the center and must pass through normally.
+# Slot 0 starts on the left edge together with slot 1 in the center. Edge
+# gestures are one-finger only, so both pass through as a two-finger gesture.
 ABS_MT_SLOT 0
 ABS_MT_TRACKING_ID 100
 ABS_MT_POSITION_X 20

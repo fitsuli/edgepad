@@ -34,6 +34,7 @@ fn engine(slider: bool, double_tap: bool) -> Engine {
             } else {
                 ZoneSet::default()
             },
+            slider_delay: Duration::ZERO,
             ..EngineOptions::default()
         },
     )

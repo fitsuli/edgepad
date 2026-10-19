@@ -1,16 +1,22 @@
 //! Continuous slider steps and fractional movement retention.
 
+use std::time::Duration;
+
 use super::{
-    Capabilities, Contact, Engine, FrameOutput, Ownership, SliderAxis, SliderDirection, SliderSpec,
-    SliderStep, SlotError, Zone,
+    Capabilities, Contact, ContactPhase, Engine, FrameOutput, Ownership, SliderAxis,
+    SliderDirection, SliderSpec, SliderStep, SlotError, Zone,
 };
 
 impl Engine {
+    /// Steps wait for `slider_delay` after the contact lands, so a second
+    /// finger or a palm flag can still take the contact away. `None` releases
+    /// them immediately.
     pub(super) fn emit_slider_steps_if_ready(
         &mut self,
+        slot: i32,
+        timestamp: Option<Duration>,
         output: &mut FrameOutput,
     ) -> Result<(), SlotError> {
-        let slot = self.current_slot;
         let (zone, spec, position, tracking_id) = {
             let Some(contact) = &self.slot(slot)?.contact else {
                 return Ok(());
@@ -30,6 +36,7 @@ impl Engine {
             (zone, spec, position, contact.tracking_id)
         };
 
+        let slider_delay = self.options.slider_delay;
         let contact = self
             .slot_mut(slot)?
             .contact
@@ -39,6 +46,11 @@ impl Engine {
             contact.slider_anchor = Some(position);
             return Ok(());
         };
+        if let (Some(started_at), Some(timestamp)) = (contact.started_at, timestamp) {
+            if timestamp < started_at.saturating_add(slider_delay) {
+                return Ok(());
+            }
+        }
 
         let moved_by_step = (position - anchor).abs() >= spec.step;
 
@@ -80,6 +92,23 @@ impl Engine {
         Ok(())
     }
 
+    /// A diagonal drag from the edge is pointer motion. Handing it back before
+    /// the first step keeps the cursor from freezing under it.
+    pub(super) fn slid_off_axis_before_first_step(&self, slot: i32) -> Result<bool, SlotError> {
+        let Some(contact) = &self.slot(slot)?.contact else {
+            return Ok(false);
+        };
+        let Ownership::Claimed(zone) = contact.ownership else {
+            return Ok(false);
+        };
+        let Some(spec) = self.slider_for_zone(zone) else {
+            return Ok(false);
+        };
+        Ok(!contact.gesture_rejected
+            && contact.contact_phase == ContactPhase::Motion
+            && moved_across_slider(spec.axis, contact))
+    }
+
     pub(super) fn slider_for_zone(&self, zone: Zone) -> Option<SliderSpec> {
         self.sliders
             .iter()
@@ -104,6 +133,28 @@ pub(super) fn validate_slider_specs(sliders: &[SliderSpec]) {
             slider.step
         );
     }
+}
+
+// More than half as far across the slider as along it, about 27 degrees.
+// shortcut: compares raw units, so X and Y resolution must match (the Zenbook
+// S14 reports 62 and 64 units/mm), carry ABS resolution in Capabilities once a
+// supported touchpad differs much.
+fn moved_across_slider(axis: SliderAxis, contact: &Contact) -> bool {
+    let (Some(start_x), Some(start_y), Some(x), Some(y)) = (
+        contact.start_x,
+        contact.start_y,
+        contact.current_x,
+        contact.current_y,
+    ) else {
+        return false;
+    };
+    let dx = (x - start_x).abs();
+    let dy = (y - start_y).abs();
+    let (along, across) = match axis {
+        SliderAxis::Horizontal => (dx, dy),
+        SliderAxis::Vertical => (dy, dx),
+    };
+    across * 2 > along
 }
 
 pub(super) fn slider_position(

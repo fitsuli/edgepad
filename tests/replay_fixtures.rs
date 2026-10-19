@@ -126,30 +126,34 @@ fn center_touch_fixture_passes_through_from_down_to_release() {
 }
 
 #[test]
-fn mixed_edge_and_center_fixture_claims_only_edge_slot() {
+fn mixed_edge_and_center_fixture_passes_both_contacts_through() {
     let outputs = run_fixture(include_str!("fixtures/mixed-edge-and-center.ev"))
         .expect("mixed fixture should run through engine");
 
     assert_eq!(
         collect_passthrough(&outputs),
         vec![
+            Event::slot(0),
+            Event::tracking_id(100),
+            Event::x(20),
+            Event::y(300),
             Event::slot(1),
             Event::tracking_id(200),
             Event::x(500),
             Event::y(300),
+            Event::slot(0),
+            Event::x(220),
+            Event::y(310),
             Event::slot(1),
             Event::x(510),
             Event::y(310),
+            Event::slot(0),
+            Event::tracking_id(-1),
             Event::slot(1),
             Event::tracking_id(-1),
         ]
     );
-
-    let gestures = collect_gestures(&outputs);
-    assert_eq!(gestures.len(), 1);
-    assert_eq!(gestures[0].slot, 0);
-    assert_eq!(gestures[0].zone, Zone::Left);
-    assert_eq!(gestures[0].direction, GestureDirection::Right);
+    assert!(collect_gestures(&outputs).is_empty());
 }
 
 #[test]

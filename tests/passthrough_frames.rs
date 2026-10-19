@@ -50,20 +50,36 @@ fn center_touch_passthrough_preserves_frame_boundaries() {
 }
 
 #[test]
-fn mixed_edge_and_center_passthrough_preserves_only_center_frames() {
+fn mixed_edge_and_center_passthrough_keeps_both_contacts_in_every_frame() {
     let outputs = run_fixture(include_str!("fixtures/mixed-edge-and-center.ev"));
 
     assert_eq!(
         passthrough_frames(&outputs),
         vec![
             vec![
+                Event::slot(0),
+                Event::tracking_id(100),
+                Event::x(20),
+                Event::y(300),
                 Event::slot(1),
                 Event::tracking_id(200),
                 Event::x(500),
                 Event::y(300),
             ],
-            vec![Event::slot(1), Event::x(510), Event::y(310)],
-            vec![Event::slot(1), Event::tracking_id(-1)],
+            vec![
+                Event::slot(0),
+                Event::x(220),
+                Event::y(310),
+                Event::slot(1),
+                Event::x(510),
+                Event::y(310),
+            ],
+            vec![
+                Event::slot(0),
+                Event::tracking_id(-1),
+                Event::slot(1),
+                Event::tracking_id(-1),
+            ],
         ]
     );
 }

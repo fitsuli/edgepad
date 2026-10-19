@@ -31,6 +31,8 @@ pub enum ProxyMode {
 #[derive(Debug, Clone)]
 pub struct ProxyRunConfig {
     pub device_path: PathBuf,
+    /// Where the typing lockout looks for keyboards.
+    pub input_root: PathBuf,
     pub limit: ProxyRunLimit,
     pub edge_widths: EdgeWidths,
     pub engine_options: EngineOptions,

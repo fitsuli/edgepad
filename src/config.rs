@@ -27,7 +27,8 @@ pub const DEFAULT_EDGE_WIDTH: f32 = 0.10;
 pub const DEFAULT_SLIDER_STEP: f32 = 0.04;
 pub use crate::core::{
     DEFAULT_DOUBLE_TAP_MAX_DISTANCE, DEFAULT_DOUBLE_TAP_TIMEOUT_MS, DEFAULT_PALM_REJECTION,
-    DEFAULT_SWIPE_MIN_DISTANCE, DEFAULT_TAP_MAX_DURATION_MS, DEFAULT_TAP_MIN_DURATION_MS,
+    DEFAULT_SIDE_EDGE_TOP_DEAD_ZONE, DEFAULT_SLIDER_DELAY_MS, DEFAULT_SWIPE_MIN_DISTANCE,
+    DEFAULT_TAP_MAX_DURATION_MS, DEFAULT_TAP_MIN_DURATION_MS, DEFAULT_TYPING_LOCKOUT_MS,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -41,6 +42,9 @@ pub struct EdgepadConfig {
     pub double_tap_timeout_ms: u64,
     pub double_tap_max_distance: f32,
     pub swipe_min_distance: f32,
+    pub slider_delay_ms: u64,
+    pub side_edge_top_dead_zone: f32,
+    pub typing_lockout_ms: u64,
     pub gestures: Vec<GestureBindingConfig>,
     pub sliders: Vec<SliderBindingConfig>,
 }
@@ -65,6 +69,9 @@ impl Default for EdgepadConfig {
             double_tap_timeout_ms: DEFAULT_DOUBLE_TAP_TIMEOUT_MS,
             double_tap_max_distance: DEFAULT_DOUBLE_TAP_MAX_DISTANCE,
             swipe_min_distance: DEFAULT_SWIPE_MIN_DISTANCE,
+            slider_delay_ms: DEFAULT_SLIDER_DELAY_MS,
+            side_edge_top_dead_zone: DEFAULT_SIDE_EDGE_TOP_DEAD_ZONE,
+            typing_lockout_ms: DEFAULT_TYPING_LOCKOUT_MS,
             gestures: Vec::new(),
             sliders: Vec::new(),
         }

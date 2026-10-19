@@ -12,7 +12,7 @@ use crate::raw::{
 };
 use evdev::{
     raw_stream::RawDevice, uinput::VirtualDevice, AbsInfo, AbsoluteAxisCode, AttributeSet,
-    InputEvent, KeyCode, PropType, UinputAbsSetup,
+    InputEvent, InputId, KeyCode, PropType, UinputAbsSetup,
 };
 use std::io;
 
@@ -144,6 +144,7 @@ fn axis_from_abs_infos(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VirtualTouchpadSpec {
     pub name: String,
+    pub input_id: Option<InputId>,
     pub properties: Vec<u16>,
     pub keys: Vec<u16>,
     pub absolute_axes: Vec<VirtualAbsAxis>,
@@ -172,13 +173,18 @@ impl VirtualTouchpadSpec {
             .map(|key| key.0)
             .filter(|code| is_pointer_button_code(*code))
             .collect();
-        Self::from_physical_device_info(
-            PhysicalTouchpadAbsInfo::from_raw_device(device, capabilities),
-            properties,
-            physical_buttons,
-            DEFAULT_VIRTUAL_TOUCHPAD_NAME,
-            palm_rejection,
-        )
+        // libinput treats a USB touchpad as external and then skips palm
+        // detection and disable-while-typing, so keep the physical identity.
+        Self {
+            input_id: Some(device.input_id()),
+            ..Self::from_physical_device_info(
+                PhysicalTouchpadAbsInfo::from_raw_device(device, capabilities),
+                properties,
+                physical_buttons,
+                DEFAULT_VIRTUAL_TOUCHPAD_NAME,
+                palm_rejection,
+            )
+        }
     }
 
     pub fn named(capabilities: Capabilities, name: impl Into<String>) -> Self {
@@ -211,6 +217,7 @@ impl VirtualTouchpadSpec {
         absolute_axes.extend(abs_info.mt_tool_type);
         Self {
             name: name.into(),
+            input_id: None,
             properties: vec![PropType::POINTER.0],
             keys: vec![
                 BTN_TOUCH,
@@ -266,6 +273,9 @@ pub fn build_virtual_touchpad(spec: &VirtualTouchpadSpec) -> io::Result<VirtualD
         .name(&spec.name)
         .with_properties(&properties)?
         .with_keys(&keys)?;
+    if let Some(input_id) = &spec.input_id {
+        builder = builder.input_id(input_id.clone());
+    }
 
     for axis in &spec.absolute_axes {
         builder = builder.with_absolute_axis(&axis.to_uinput_abs_setup())?;

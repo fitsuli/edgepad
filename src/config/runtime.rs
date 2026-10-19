@@ -70,6 +70,9 @@ impl EdgepadConfig {
             single_tap_zones: ZoneSet::from_zones(self.gestures.iter().filter_map(|binding| {
                 (binding.direction == GestureDirection::Tap).then_some(binding.zone)
             })),
+            slider_delay: Duration::from_millis(self.slider_delay_ms),
+            side_edge_top_dead_zone: self.side_edge_top_dead_zone,
+            typing_lockout: Duration::from_millis(self.typing_lockout_ms),
         }
     }
 }

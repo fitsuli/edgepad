@@ -1,8 +1,10 @@
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use crate::core::{
     Capabilities, EdgeWidths, Engine, EngineOptions, ResyncContact, SliderSpec, SlotSnapshot,
 };
+use crate::device::KeyboardMonitor;
 use crate::raw::{RawEvent, RawOutputComposer, RawOutputSink};
 
 use super::{GestureHandler, ProxyRunLimit, ProxyRuntimeStats};
@@ -30,6 +32,7 @@ pub(super) struct SessionConfig {
     pub slider_specs: Vec<SliderSpec>,
     pub initial_slot_snapshots: Vec<SlotSnapshot>,
     pub buttonpad: bool,
+    pub input_root: PathBuf,
 }
 
 pub(super) struct ResyncSnapshot {
@@ -59,6 +62,7 @@ pub(super) struct ProxySession<'a> {
     drain_deadline: Option<Instant>,
     frames: FrameAssembler,
     recognition_deadline: RecognitionDeadline,
+    keyboards: KeyboardMonitor,
 }
 
 impl<'a> ProxySession<'a> {
@@ -82,6 +86,10 @@ impl<'a> ProxySession<'a> {
             drain_deadline: None,
             frames: FrameAssembler::default(),
             recognition_deadline: RecognitionDeadline::default(),
+            keyboards: KeyboardMonitor::new(
+                config.input_root,
+                config.engine_options.typing_lockout,
+            ),
         })
     }
 
@@ -195,6 +203,14 @@ impl<'a> ProxySession<'a> {
         Ok(false)
     }
 
+    /// Call after every device poll, idle or not. Daemon polls wake at least
+    /// every 100 ms, which keeps the keyboard queues from overflowing.
+    pub(super) fn observe_keyboards(&mut self) {
+        if let Some(pressed_at) = self.keyboards.latest_press() {
+            self.engine.record_key_press(pressed_at);
+        }
+    }
+
     pub(super) fn into_stats(self) -> ProxyRuntimeStats {
         self.stats
     }
@@ -255,6 +271,7 @@ impl<'a> ProxySession<'a> {
             &mut self.engine,
             self.touch_state.is_touch_down(),
             handler,
+            &mut self.keyboards,
         ) as usize;
     }
 
@@ -288,6 +305,7 @@ fn apply_pending_recognition_reload<H>(
     engine: &mut Engine,
     physical_touch_down: bool,
     handler: &mut H,
+    keyboards: &mut KeyboardMonitor,
 ) -> bool
 where
     H: GestureHandler,
@@ -301,6 +319,7 @@ where
     let Some(reloaded) = handler.take_recognition_config_reload() else {
         return false;
     };
+    keyboards.reconfigure(reloaded.engine_options.typing_lockout);
     engine.reconfigure_recognition(
         reloaded.edge_widths,
         reloaded.slider_specs,

@@ -34,12 +34,12 @@ fn proxy_dry_run_frame_stats_match_raw_replay_output() {
     assert_eq!(stats.raw_frames, 1);
     assert_eq!(stats.raw_events, 11);
     assert_eq!(stats.recognizer_events, 8);
-    assert_eq!(stats.recognizer_passthrough_events, 4);
-    assert_eq!(stats.claimed_edge_frames, 1);
+    assert_eq!(stats.recognizer_passthrough_events, 8);
+    assert_eq!(stats.claimed_edge_frames, 0);
     assert_eq!(stats.passthrough_frames, 1);
     assert_eq!(stats.empty_output_frames, 0);
     assert_eq!(stats.composed_frames, 1);
-    assert_eq!(stats.composed_events, 8);
+    assert_eq!(stats.composed_events, 12);
     assert_eq!(stats.gestures.len(), 0);
     assert!(stats.gesture_counts.is_empty());
     assert!(!stats.resync_required);

@@ -18,6 +18,9 @@ pub(super) struct RawEdgepadConfig {
     pub(super) double_tap_timeout_ms: Option<u64>,
     pub(super) double_tap_max_distance: Option<f32>,
     pub(super) swipe_min_distance: Option<f32>,
+    pub(super) slider_delay_ms: Option<u64>,
+    pub(super) side_edge_top_dead_zone: Option<f32>,
+    pub(super) typing_lockout_ms: Option<u64>,
     #[serde(default)]
     pub(super) gestures: Vec<RawGestureBindingConfig>,
     #[serde(default)]

@@ -52,6 +52,12 @@ pub fn run_doctor(config: &DoctorConfig) -> DoctorReport {
         &config.uinput_path,
     );
     checks.extend(devices.checks);
+    if let Some(loaded) = configuration.loaded.as_ref() {
+        checks.push(devices::check_keyboards(
+            loaded.typing_lockout_ms,
+            &config.input_root,
+        ));
+    }
     checks.extend(access::check(&devices.access));
     checks.extend(service::check(&config.service_name));
     DoctorReport { checks }

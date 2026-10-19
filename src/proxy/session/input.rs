@@ -118,10 +118,8 @@ impl PhysicalTouchState {
     pub(super) fn observe_frame(&mut self, frame: &RawFrame) {
         for event in &frame.events {
             match (event.kind, event.code) {
-                (EV_ABS, ABS_MT_SLOT) => {
-                    if self.slot_index(event.value).is_some() {
-                        self.current_slot = event.value;
-                    }
+                (EV_ABS, ABS_MT_SLOT) if self.slot_index(event.value).is_some() => {
+                    self.current_slot = event.value;
                 }
                 (EV_ABS, ABS_MT_TRACKING_ID) if event.value >= 0 => {
                     if let Some(index) = self.slot_index(self.current_slot) {

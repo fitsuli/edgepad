@@ -31,7 +31,7 @@ pub(super) fn validate_slider_step(parsed: f32, name: &str) -> Result<f32, Strin
     Ok(parsed)
 }
 
-pub(super) fn validate_tap_min_duration_ms(parsed: u64, name: &str) -> Result<u64, String> {
+pub(super) fn validate_duration_ms(parsed: u64, name: &str) -> Result<u64, String> {
     if parsed > 10_000 {
         return Err(format!("{name} must be <= 10000"));
     }
@@ -55,6 +55,13 @@ pub(super) fn validate_double_tap_timeout_ms(parsed: u64, name: &str) -> Result<
 pub(super) fn validate_double_tap_max_distance(parsed: f32, name: &str) -> Result<f32, String> {
     if !parsed.is_finite() || parsed <= 0.0 || parsed > 1.0 {
         return Err(format!("{name} must be > 0 and <= 1"));
+    }
+    Ok(parsed)
+}
+
+pub(super) fn validate_side_edge_top_dead_zone(parsed: f32) -> Result<f32, String> {
+    if !(0.0..1.0).contains(&parsed) {
+        return Err("side_edge_top_dead_zone must be >= 0 and < 1".to_string());
     }
     Ok(parsed)
 }

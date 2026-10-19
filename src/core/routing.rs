@@ -1,7 +1,7 @@
 //! Contact ownership, passthrough slot routing, and buttonpad promotion.
 
 use super::sliders::slider_position;
-use super::{Engine, Event, FrameOutput, Ownership, SlotError, Zone};
+use super::{Contact, Engine, Event, FrameOutput, Ownership, SlotError, Zone};
 
 impl Engine {
     pub fn set_buttonpad(&mut self, buttonpad: bool) {
@@ -90,7 +90,10 @@ impl Engine {
         let (Some(start_x), Some(start_y)) = (contact.start_x, contact.start_y) else {
             return Ok(());
         };
-        let zone = if self.buttonpad && !self.pressed_physical_buttons.is_empty() {
+        let zone = if (self.buttonpad && !self.pressed_physical_buttons.is_empty())
+            || contact.overlapped_other_contact
+            || self.landed_while_typing(contact)
+        {
             None
         } else {
             self.zone_for_position(start_x, start_y)
@@ -135,49 +138,52 @@ impl Engine {
         Ok(())
     }
 
-    fn promote_claimed_contacts(&mut self) -> Vec<Event> {
-        // These contacts' original downs were hidden from the virtual device.
-        // Synthesize complete downs at their current positions so the compositor
-        // can use them for click-drag and clickfinger.
-        let mut events = Vec::new();
-        for index in 0..self.slots.len() {
-            let slot_number = self.caps.slot_min + index as i32;
-            let slot = &mut self.slots[index];
-            let Some(contact) = &mut slot.contact else {
-                continue;
-            };
-            if !matches!(contact.ownership, Ownership::Claimed(_)) {
-                continue;
-            }
-            let (Some(x), Some(y)) = (contact.current_x, contact.current_y) else {
-                continue;
-            };
-            contact.ownership = Ownership::Passthrough;
-            contact.slider_anchor = None;
-            let tracking_id = contact.tracking_id;
-            let tool_type = slot.memory.tool_type;
+    pub(super) fn promote_claimed_contacts(&mut self) -> Vec<Event> {
+        (self.caps.slot_min..=self.caps.slot_max)
+            .flat_map(|slot| self.promote_claimed_contact(slot).unwrap_or_default())
+            .collect()
+    }
 
-            events.extend([
-                Event::slot(slot_number),
-                Event::tracking_id(tracking_id),
-                Event::x(x),
-                Event::y(y),
-            ]);
-            if let Some(tool_type) = tool_type {
-                events.push(Event::tool_type(tool_type));
-            }
+    pub(super) fn promote_claimed_contact(&mut self, slot: i32) -> Result<Vec<Event>, SlotError> {
+        // The contact's original down was hidden from the virtual device.
+        // Synthesize a complete down at its current position so the compositor
+        // can use it for click-drag, clickfinger, scrolling, or pointer motion.
+        let slot_state = self.slot_mut(slot)?;
+        let tool_type = slot_state.memory.tool_type;
+        let Some(contact) = &mut slot_state.contact else {
+            return Ok(Vec::new());
+        };
+        if !matches!(contact.ownership, Ownership::Claimed(_)) {
+            return Ok(Vec::new());
         }
-        events
+        let (Some(x), Some(y)) = (contact.current_x, contact.current_y) else {
+            return Ok(Vec::new());
+        };
+        contact.ownership = Ownership::Passthrough;
+        contact.slider_anchor = None;
+
+        let mut events = vec![
+            Event::slot(slot),
+            Event::tracking_id(contact.tracking_id),
+            Event::x(x),
+            Event::y(y),
+        ];
+        events.extend(tool_type.map(Event::tool_type));
+        Ok(events)
     }
 
     fn zone_for_position(&self, start_x: i32, start_y: i32) -> Option<Zone> {
         let x = self.caps.x.normalize(start_x);
         let y = self.caps.y.normalize(start_y);
 
+        // The dead zone only checks where the touch lands, so a slide that
+        // starts lower can still move through it.
+        let below_side_dead_zone = y >= self.options.side_edge_top_dead_zone;
+
         // This order resolves corner overlaps and is part of gesture behavior.
-        if x < self.edges.left {
+        if x < self.edges.left && below_side_dead_zone {
             Some(Zone::Left)
-        } else if x > 1.0 - self.edges.right {
+        } else if x > 1.0 - self.edges.right && below_side_dead_zone {
             Some(Zone::Right)
         } else if y < self.edges.top {
             Some(Zone::Top)
@@ -185,6 +191,15 @@ impl Engine {
             Some(Zone::Bottom)
         } else {
             None
+        }
+    }
+
+    fn landed_while_typing(&self, contact: &Contact) -> bool {
+        match (contact.started_at, self.last_key_press) {
+            (Some(started_at), Some(pressed_at)) => {
+                started_at.saturating_sub(pressed_at) < self.options.typing_lockout
+            }
+            _ => false,
         }
     }
 }

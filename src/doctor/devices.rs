@@ -1,12 +1,14 @@
 use std::fs::OpenOptions;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use evdev::Device;
 
 use crate::config::DeviceConfig;
 use crate::device::{
     discover_device_report, format_device_line, touchpad_candidates, DiscoveryReport,
+    KeyboardMonitor,
 };
 
 use super::{CheckStatus, DoctorCheck, DoctorSection};
@@ -166,6 +168,39 @@ fn check_uinput(path: &Path) -> (bool, DoctorCheck) {
     (
         opened,
         DoctorCheck::new(status, DoctorSection::Device, "uinput", detail),
+    )
+}
+
+pub(super) fn check_keyboards(lockout_ms: u64, input_root: &Path) -> DoctorCheck {
+    if lockout_ms == 0 {
+        return DoctorCheck::new(
+            CheckStatus::Ok,
+            DoctorSection::Device,
+            "keyboards",
+            "typing lockout disabled; keyboards are not read",
+        );
+    }
+    let names =
+        KeyboardMonitor::new(input_root.to_path_buf(), Duration::from_millis(lockout_ms)).names();
+    if names.is_empty() {
+        return DoctorCheck::new(
+            CheckStatus::Warn,
+            DoctorSection::Device,
+            "keyboards",
+            format!(
+                "typing lockout ({lockout_ms} ms) has no read access to any keyboard under {}; edge touches right after typing are not filtered",
+                input_root.display()
+            ),
+        );
+    }
+    DoctorCheck::new(
+        CheckStatus::Ok,
+        DoctorSection::Device,
+        "keyboards",
+        format!(
+            "typing lockout ({lockout_ms} ms) reads key press times from {}",
+            names.join(", ")
+        ),
     )
 }
 

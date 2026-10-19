@@ -187,6 +187,7 @@ fn resync_snapshot_keeps_only_active_slots_with_real_slot_numbers() {
 fn proxy_summary_preserves_runtime_metadata() {
     let config = ProxyRunConfig {
         device_path: PathBuf::from("/dev/input/event7"),
+        input_root: PathBuf::from("/dev/input"),
         limit: ProxyRunLimit::Frames {
             frame_boundaries: 12,
             stop_after_limit: StopAfterFrameLimit::Immediately,

@@ -314,6 +314,7 @@ fn run_daemon_proxy_with_startup_retry(
             Ok(run_proxy_with_gesture_handler_and_ready(
                 &ProxyRunConfig {
                     device_path,
+                    input_root: input_root.to_path_buf(),
                     limit: ProxyRunLimit::UntilStopped {
                         stop: stop.clone(),
                         idle_drain_timeout: DAEMON_IDLE_DRAIN_TIMEOUT,

@@ -2,11 +2,16 @@ use edgepad::core::{
     AxisRange, Capabilities, EdgeWidths, EngineOptions, Gesture, GestureDirection, Zone, ZoneSet,
 };
 use edgepad::proxy::{
-    run_proxy_with_gesture_handler_and_ready, GestureHandler, ProxyMode, ProxyRunConfig,
-    ProxyRunLimit, StopAfterFrameLimit,
+    run_proxy_with_gesture_handler_and_ready, GestureHandler, NoopGestureHandler, ProxyMode,
+    ProxyRunConfig, ProxyRunLimit, StopAfterFrameLimit,
 };
-use edgepad::raw::{RawEvent, RawOutputSink};
-use edgepad::uinput::{build_virtual_touchpad, UinputRawOutputSink, VirtualTouchpadSpec};
+use edgepad::raw::{RawEvent, RawOutputSink, ABS_MT_TOOL_TYPE};
+use edgepad::uinput::{
+    build_virtual_touchpad, PhysicalTouchpadAbsInfo, UinputRawOutputSink, VirtualAbsAxis,
+    VirtualTouchpadSpec, DEFAULT_VIRTUAL_TOUCHPAD_NAME,
+};
+use evdev::uinput::VirtualDevice;
+use evdev::{AbsoluteAxisCode, AttributeSet, BusType, EventType, InputEvent, InputId, KeyCode};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -90,17 +95,17 @@ fn live_double_tap_options(single_tap: bool) -> EngineOptions {
     }
 }
 
-fn create_live_source(
-    name: &str,
-) -> Result<
-    (
-        UinputRawOutputSink<evdev::uinput::VirtualDevice>,
-        std::path::PathBuf,
-    ),
-    String,
-> {
-    let spec = VirtualTouchpadSpec::named(live_test_capabilities(), name);
-    let mut device = build_virtual_touchpad(&spec)
+type LiveSource = (
+    UinputRawOutputSink<evdev::uinput::VirtualDevice>,
+    std::path::PathBuf,
+);
+
+fn create_live_source(name: &str) -> Result<LiveSource, String> {
+    create_live_source_from_spec(&VirtualTouchpadSpec::named(live_test_capabilities(), name))
+}
+
+fn create_live_source_from_spec(spec: &VirtualTouchpadSpec) -> Result<LiveSource, String> {
+    let mut device = build_virtual_touchpad(spec)
         .map_err(|err| format!("failed to create live source touchpad: {err}"))?;
     let device_path = device
         .enumerate_dev_nodes_blocking()
@@ -155,6 +160,7 @@ fn live_proxy_recognizes_double_tap_from_real_uinput_frames() -> Result<(), Stri
         run_proxy_with_gesture_handler_and_ready(
             &ProxyRunConfig {
                 device_path,
+                input_root: "/dev/input".into(),
                 limit: ProxyRunLimit::Frames {
                     frame_boundaries: 4,
                     stop_after_limit: StopAfterFrameLimit::WhenIdle,
@@ -211,6 +217,7 @@ fn live_proxy_releases_single_tap_on_idle_deadline() -> Result<(), String> {
         run_proxy_with_gesture_handler_and_ready(
             &ProxyRunConfig {
                 device_path,
+                input_root: "/dev/input".into(),
                 limit: ProxyRunLimit::Frames {
                     frame_boundaries: 2,
                     stop_after_limit: StopAfterFrameLimit::WhenIdle,
@@ -251,5 +258,217 @@ fn live_proxy_releases_single_tap_on_idle_deadline() -> Result<(), String> {
     assert_eq!(gesture.zone, Zone::Left);
     assert_eq!(summary.stats.gestures, vec![gesture]);
     assert!(!summary.stats.idle_drain_timed_out);
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires /dev/uinput and permission to create and grab virtual input devices"]
+fn live_proxy_mirrors_identity_and_rejects_palm_left_in_slot_before_startup() -> Result<(), String>
+{
+    let source_id = InputId::new(BusType::BUS_I2C, 0xed9e, 0x7a1d, 0x0100);
+    let spec = VirtualTouchpadSpec {
+        input_id: Some(source_id.clone()),
+        ..VirtualTouchpadSpec::from_physical_abs_info(
+            PhysicalTouchpadAbsInfo {
+                mt_tool_type: Some(VirtualAbsAxis::new(ABS_MT_TOOL_TYPE, 0, 2)),
+                ..PhysicalTouchpadAbsInfo::from_capabilities(live_test_capabilities())
+            },
+            "edgepad live palm source",
+        )
+    };
+    let (mut source, device_path) = create_live_source_from_spec(&spec)?;
+    // Leave slot 0 marked as a palm before edgepad starts. Linux will not
+    // report the unchanged tool type again for the next contact in that slot.
+    emit_frame(
+        &mut source,
+        [
+            RawEvent::abs_mt_slot(0),
+            RawEvent::abs_mt_tracking_id(10),
+            RawEvent::abs_mt_tool_type(2),
+            RawEvent::abs_mt_position_x(500),
+            RawEvent::abs_mt_position_y(300),
+            RawEvent::btn_touch(true),
+            RawEvent::btn_tool_finger(true),
+        ],
+    )?;
+    emit_frame(
+        &mut source,
+        [
+            RawEvent::abs_mt_tracking_id(-1),
+            RawEvent::btn_touch(false),
+            RawEvent::btn_tool_finger(false),
+        ],
+    )?;
+    let (ready_sender, ready_receiver) = mpsc::channel();
+
+    let proxy = thread::spawn(move || {
+        let mut handler = NoopGestureHandler;
+        run_proxy_with_gesture_handler_and_ready(
+            &ProxyRunConfig {
+                device_path,
+                input_root: "/dev/input".into(),
+                limit: ProxyRunLimit::Frames {
+                    frame_boundaries: 3,
+                    stop_after_limit: StopAfterFrameLimit::WhenIdle,
+                },
+                edge_widths: EdgeWidths::all(0.10),
+                engine_options: EngineOptions::default(),
+                slider_specs: Vec::new(),
+                mode: ProxyMode::UinputGrab,
+            },
+            &mut handler,
+            &mut |_| {
+                ready_sender
+                    .send(())
+                    .map_err(|_| "live test readiness receiver disappeared".to_string())
+            },
+        )
+    });
+
+    ready_receiver
+        .recv_timeout(Duration::from_secs(3))
+        .map_err(|err| format!("live proxy did not become ready: {err}"))?;
+    let output = find_proxy_output(&source_id)?;
+    assert_eq!(output.input_id(), source_id);
+    assert!(output
+        .supported_absolute_axes()
+        .is_some_and(|axes| axes.contains(AbsoluteAxisCode::ABS_MT_TOOL_TYPE)));
+
+    emit_frame(
+        &mut source,
+        [
+            RawEvent::abs_mt_tracking_id(11),
+            RawEvent::abs_mt_position_x(20),
+            RawEvent::btn_touch(true),
+            RawEvent::btn_tool_finger(true),
+        ],
+    )?;
+    thread::sleep(Duration::from_millis(30));
+    emit_frame(&mut source, [RawEvent::abs_mt_position_x(220)])?;
+    thread::sleep(Duration::from_millis(30));
+    emit_frame(
+        &mut source,
+        [
+            RawEvent::abs_mt_tracking_id(-1),
+            RawEvent::btn_touch(false),
+            RawEvent::btn_tool_finger(false),
+        ],
+    )?;
+
+    let summary = proxy
+        .join()
+        .map_err(|_| "live proxy thread panicked".to_string())?
+        .map_err(|err| err.to_string())?;
+    assert!(
+        summary.stats.gestures.is_empty(),
+        "palm became a gesture: {:?}",
+        summary.stats
+    );
+    assert_eq!(summary.stats.passthrough_frames, 0);
+    Ok(())
+}
+
+fn find_proxy_output(source_id: &InputId) -> Result<evdev::Device, String> {
+    for _ in 0..20 {
+        let output = evdev::enumerate().map(|(_, device)| device).find(|device| {
+            device.name() == Some(DEFAULT_VIRTUAL_TOUCHPAD_NAME) && device.input_id() == *source_id
+        });
+        if let Some(output) = output {
+            return Ok(output);
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    Err("proxy output touchpad with the source identity did not appear".to_string())
+}
+
+fn create_live_keyboard(name: &str) -> Result<(VirtualDevice, std::path::PathBuf), String> {
+    let mut keys = AttributeSet::<KeyCode>::new();
+    keys.insert(KeyCode::KEY_A);
+    let mut keyboard = VirtualDevice::builder()
+        .and_then(|builder| builder.name(name).with_keys(&keys))
+        .and_then(|builder| builder.build())
+        .map_err(|err| format!("failed to create live keyboard: {err}"))?;
+    let path = keyboard
+        .enumerate_dev_nodes_blocking()
+        .map_err(|err| format!("failed to enumerate live keyboard: {err}"))?
+        .next()
+        .ok_or_else(|| "live keyboard exposed no event node".to_string())?
+        .map_err(|err| format!("failed to resolve live keyboard event node: {err}"))?;
+    Ok((keyboard, path))
+}
+
+fn press_a(keyboard: &mut VirtualDevice) -> Result<(), String> {
+    keyboard
+        .emit(&[
+            InputEvent::new(EventType::KEY.0, KeyCode::KEY_A.0, 1),
+            InputEvent::new(EventType::KEY.0, KeyCode::KEY_A.0, 0),
+        ])
+        .map_err(|err| format!("failed to press live key: {err}"))
+}
+
+#[test]
+#[ignore = "requires /dev/uinput and read access to new keyboard event nodes"]
+fn live_proxy_ignores_edge_tap_right_after_typing_without_grabbing_the_keyboard(
+) -> Result<(), String> {
+    let (mut typing, typing_path) = create_live_keyboard("live lockout test keyboard")?;
+    let (mut own_keys, _) = create_live_keyboard("edgepad live lockout keys")?;
+    let (mut source, device_path) = create_live_source("edgepad live lockout touchpad")?;
+    let (ready_sender, ready_receiver) = mpsc::channel();
+
+    let proxy = thread::spawn(move || {
+        let mut handler = NoopGestureHandler;
+        run_proxy_with_gesture_handler_and_ready(
+            &ProxyRunConfig {
+                device_path,
+                input_root: "/dev/input".into(),
+                limit: ProxyRunLimit::Frames {
+                    frame_boundaries: 4,
+                    stop_after_limit: StopAfterFrameLimit::WhenIdle,
+                },
+                edge_widths: EdgeWidths::all(0.10),
+                engine_options: EngineOptions::default(),
+                slider_specs: Vec::new(),
+                mode: ProxyMode::UinputGrab,
+            },
+            &mut handler,
+            &mut |_| {
+                ready_sender
+                    .send(())
+                    .map_err(|_| "live test readiness receiver disappeared".to_string())
+            },
+        )
+    });
+    ready_receiver
+        .recv_timeout(Duration::from_secs(3))
+        .map_err(|err| format!("live proxy did not become ready: {err}"))?;
+    // The proxy opens keyboards right after it reports ready.
+    thread::sleep(Duration::from_millis(200));
+
+    let mut probe = evdev::Device::open(&typing_path)
+        .map_err(|err| format!("failed to open live keyboard: {err}"))?;
+    probe
+        .grab()
+        .map_err(|err| format!("edgepad must not grab keyboards: {err}"))?;
+    probe
+        .ungrab()
+        .map_err(|err| format!("failed to release live keyboard: {err}"))?;
+
+    press_a(&mut own_keys)?;
+    emit_left_tap(&mut source, 1)?;
+    press_a(&mut typing)?;
+    emit_left_tap(&mut source, 2)?;
+
+    let summary = proxy
+        .join()
+        .map_err(|_| "live proxy thread panicked".to_string())?
+        .map_err(|err| err.to_string())?;
+    let tapped = summary
+        .stats
+        .gestures
+        .iter()
+        .map(|gesture| gesture.tracking_id)
+        .collect::<Vec<_>>();
+    assert_eq!(tapped, vec![1], "{:?}", summary.stats);
+    assert_eq!(summary.stats.passthrough_frames, 2);
     Ok(())
 }

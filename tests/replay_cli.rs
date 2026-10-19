@@ -100,11 +100,11 @@ EV_SYN SYN_REPORT 0 0
         "stdout was: {stdout}"
     );
     assert!(
-        stdout.contains("recognizer_passthrough_events: 4"),
+        stdout.contains("recognizer_passthrough_events: 8"),
         "stdout was: {stdout}"
     );
     assert!(
-        stdout.contains("composed_events: 11"),
+        stdout.contains("composed_events: 18"),
         "stdout was: {stdout}"
     );
     assert!(stdout.contains("gestures: 0"), "stdout was: {stdout}");

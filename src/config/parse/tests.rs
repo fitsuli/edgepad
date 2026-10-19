@@ -95,6 +95,43 @@ fn edgepad_config_defaults_tap_sequence_thresholds() {
         DEFAULT_DOUBLE_TAP_MAX_DISTANCE
     );
     assert_eq!(config.swipe_min_distance, DEFAULT_SWIPE_MIN_DISTANCE);
+    assert_eq!(config.slider_delay_ms, DEFAULT_SLIDER_DELAY_MS);
+    assert_eq!(config.side_edge_top_dead_zone, 0.0);
+    assert_eq!(config.typing_lockout_ms, DEFAULT_TYPING_LOCKOUT_MS);
+}
+
+#[test]
+fn edgepad_config_parses_side_edge_dead_zone_and_typing_lockout() {
+    let config = EdgepadConfig::parse("side_edge_top_dead_zone = 0.25\ntyping_lockout_ms = 0")
+        .expect("filters should parse");
+
+    let options = config.engine_options();
+    assert_eq!(options.side_edge_top_dead_zone, 0.25);
+    assert_eq!(options.typing_lockout, Duration::ZERO);
+    assert_eq!(
+        EdgepadConfig::parse("side_edge_top_dead_zone = 1.0")
+            .err()
+            .as_deref(),
+        Some("side_edge_top_dead_zone must be >= 0 and < 1")
+    );
+}
+
+#[test]
+fn edgepad_config_slider_delay_can_be_tuned_or_disabled() {
+    let tuned = EdgepadConfig::parse("slider_delay_ms = 250").expect("delay should parse");
+    let disabled = EdgepadConfig::parse("slider_delay_ms = 0").expect("zero should parse");
+
+    assert_eq!(
+        tuned.engine_options().slider_delay,
+        Duration::from_millis(250)
+    );
+    assert_eq!(disabled.engine_options().slider_delay, Duration::ZERO);
+    assert_eq!(
+        EdgepadConfig::parse("slider_delay_ms = 10001")
+            .err()
+            .as_deref(),
+        Some("slider_delay_ms must be <= 10000")
+    );
 }
 
 #[test]

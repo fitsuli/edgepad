@@ -10,6 +10,9 @@ pub const DEFAULT_TAP_MAX_DURATION_MS: u64 = 180;
 pub const DEFAULT_DOUBLE_TAP_TIMEOUT_MS: u64 = 300;
 pub const DEFAULT_DOUBLE_TAP_MAX_DISTANCE: f32 = 0.04;
 pub const DEFAULT_SWIPE_MIN_DISTANCE: f32 = 0.02;
+pub const DEFAULT_SLIDER_DELAY_MS: u64 = 400;
+pub const DEFAULT_TYPING_LOCKOUT_MS: u64 = 300;
+pub const DEFAULT_SIDE_EDGE_TOP_DEAD_ZONE: f32 = 0.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AxisRange {
@@ -183,6 +186,9 @@ pub struct EngineOptions {
     pub double_tap_max_distance: f32,
     pub double_tap_zones: ZoneSet,
     pub single_tap_zones: ZoneSet,
+    pub slider_delay: Duration,
+    pub side_edge_top_dead_zone: f32,
+    pub typing_lockout: Duration,
 }
 
 impl Default for EngineOptions {
@@ -196,6 +202,9 @@ impl Default for EngineOptions {
             double_tap_max_distance: DEFAULT_DOUBLE_TAP_MAX_DISTANCE,
             double_tap_zones: ZoneSet::default(),
             single_tap_zones: ZoneSet::all(),
+            slider_delay: Duration::from_millis(DEFAULT_SLIDER_DELAY_MS),
+            side_edge_top_dead_zone: DEFAULT_SIDE_EDGE_TOP_DEAD_ZONE,
+            typing_lockout: Duration::from_millis(DEFAULT_TYPING_LOCKOUT_MS),
         }
     }
 }

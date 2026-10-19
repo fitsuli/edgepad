@@ -1,12 +1,12 @@
 use std::time::Duration;
 
 use edgepad::core::{
-    AxisRange, Capabilities, EdgeWidths, Engine, Event, GestureDirection, SliderAxis, SliderSpec,
-    Zone,
+    AxisRange, Capabilities, EdgeWidths, Engine, EngineOptions, Event, GestureDirection,
+    SliderAxis, SliderSpec, Zone,
 };
 
 fn engine(slider: bool) -> Engine {
-    Engine::with_sliders(
+    Engine::with_options(
         Capabilities {
             slot_min: 3,
             slot_max: 4,
@@ -22,6 +22,10 @@ fn engine(slider: bool) -> Engine {
             }]
         } else {
             Vec::new()
+        },
+        EngineOptions {
+            slider_delay: Duration::ZERO,
+            ..EngineOptions::default()
         },
     )
 }

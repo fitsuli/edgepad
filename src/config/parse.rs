@@ -7,9 +7,9 @@ use std::collections::BTreeSet;
 use crate::core::{GestureDirection, SliderAxis, Zone};
 
 use super::validation::{
-    validate_double_tap_max_distance, validate_double_tap_timeout_ms, validate_edge_width,
-    validate_optional_edge_width, validate_slider_step, validate_swipe_min_distance,
-    validate_tap_max_duration_ms, validate_tap_min_duration_ms,
+    validate_double_tap_max_distance, validate_double_tap_timeout_ms, validate_duration_ms,
+    validate_edge_width, validate_optional_edge_width, validate_side_edge_top_dead_zone,
+    validate_slider_step, validate_swipe_min_distance, validate_tap_max_duration_ms,
 };
 use super::{
     CommandActionConfig, DeviceConfig, EdgeWidthOverrides, EdgepadConfig, GestureActionConfig,
@@ -47,7 +47,7 @@ impl EdgepadConfig {
         };
         if let Some(tap_min_duration_ms) = raw.tap_min_duration_ms {
             config.tap_min_duration_ms =
-                validate_tap_min_duration_ms(tap_min_duration_ms, "tap_min_duration_ms")?;
+                validate_duration_ms(tap_min_duration_ms, "tap_min_duration_ms")?;
         }
         if let Some(tap_max_duration_ms) = raw.tap_max_duration_ms {
             config.tap_max_duration_ms =
@@ -69,6 +69,17 @@ impl EdgepadConfig {
         if let Some(swipe_min_distance) = raw.swipe_min_distance {
             config.swipe_min_distance =
                 validate_swipe_min_distance(swipe_min_distance, "swipe_min_distance")?;
+        }
+        if let Some(slider_delay_ms) = raw.slider_delay_ms {
+            config.slider_delay_ms = validate_duration_ms(slider_delay_ms, "slider_delay_ms")?;
+        }
+        if let Some(side_edge_top_dead_zone) = raw.side_edge_top_dead_zone {
+            config.side_edge_top_dead_zone =
+                validate_side_edge_top_dead_zone(side_edge_top_dead_zone)?;
+        }
+        if let Some(typing_lockout_ms) = raw.typing_lockout_ms {
+            config.typing_lockout_ms =
+                validate_duration_ms(typing_lockout_ms, "typing_lockout_ms")?;
         }
 
         for (index, raw_binding) in raw.gestures.into_iter().enumerate() {

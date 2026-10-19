@@ -43,6 +43,7 @@ where
             slider_specs: config.slider_specs.clone(),
             initial_slot_snapshots,
             buttonpad,
+            input_root: config.input_root.clone(),
         },
         &config.limit,
         &mut sink,
@@ -116,6 +117,7 @@ where
             slider_specs: config.slider_specs.clone(),
             initial_slot_snapshots,
             buttonpad,
+            input_root: config.input_root.clone(),
         },
         &config.limit,
         &mut sink,
@@ -362,7 +364,9 @@ where
     let mut session = ProxySession::new(config, limit)?;
     loop {
         let timeout = session.poll_timeout(Instant::now());
-        let Some(events) = fetch_proxy_events(device, timeout)? else {
+        let fetched = fetch_proxy_events(device, timeout)?;
+        session.observe_keyboards();
+        let Some(events) = fetched else {
             if session.on_idle_poll(Instant::now(), sink, handler)? {
                 return Ok(session.into_stats());
             }

@@ -125,13 +125,16 @@ pub(super) fn edge_widths_label(widths: EdgeWidths) -> String {
 pub(super) fn print_recognition_profile(profile: &RecognitionProfile) {
     println!("profile: {}", profile.source_label());
     println!(
-        "profile_settings: edge_widths={} tap_min_duration_ms={} tap_max_duration_ms={} double_tap_timeout_ms={} double_tap_max_distance={:.3} swipe_min_distance={:.3} sliders={} palm_rejection={}",
+        "profile_settings: edge_widths={} tap_min_duration_ms={} tap_max_duration_ms={} double_tap_timeout_ms={} double_tap_max_distance={:.3} swipe_min_distance={:.3} slider_delay_ms={} side_edge_top_dead_zone={:.3} typing_lockout_ms={} sliders={} palm_rejection={}",
         edge_widths_label(profile.edge_widths),
         profile.engine_options.tap_min_duration.as_millis(),
         profile.engine_options.tap_max_duration.as_millis(),
         profile.engine_options.double_tap_timeout.as_millis(),
         profile.engine_options.double_tap_max_distance,
         profile.engine_options.swipe_min_distance,
+        profile.engine_options.slider_delay.as_millis(),
+        profile.engine_options.side_edge_top_dead_zone,
+        profile.engine_options.typing_lockout.as_millis(),
         profile.slider_specs.len(),
         profile.engine_options.palm_rejection
     );
