@@ -1,0 +1,44 @@
+# Linux reports ABS_MT_TOOL_TYPE only when a slot's value changes, so later
+# contacts in the same slot inherit the last reported tool type.
+# A palm in the center marks slot 0 as MT_TOOL_PALM.
+ABS_MT_SLOT 0
+ABS_MT_TRACKING_ID 600
+ABS_MT_TOOL_TYPE 2
+ABS_MT_POSITION_X 500
+ABS_MT_POSITION_Y 300
+SYN_REPORT 0
+
+ABS_MT_SLOT 0
+ABS_MT_TRACKING_ID -1
+SYN_REPORT 50000
+
+# Another palm on the left edge. The kernel omits the unchanged tool type.
+ABS_MT_SLOT 0
+ABS_MT_TRACKING_ID 601
+ABS_MT_POSITION_X 20
+SYN_REPORT 100000
+
+ABS_MT_SLOT 0
+ABS_MT_TRACKING_ID -1
+SYN_REPORT 150000
+
+# A finger taps the left edge and becomes a gesture.
+ABS_MT_SLOT 0
+ABS_MT_TRACKING_ID 602
+ABS_MT_TOOL_TYPE 0
+SYN_REPORT 200000
+
+ABS_MT_SLOT 0
+ABS_MT_TRACKING_ID -1
+SYN_REPORT 260000
+
+# A center finger omits the tool type again. The virtual slot last saw a palm,
+# so the passthrough contact must restate MT_TOOL_FINGER.
+ABS_MT_SLOT 0
+ABS_MT_TRACKING_ID 603
+ABS_MT_POSITION_X 500
+SYN_REPORT 400000
+
+ABS_MT_SLOT 0
+ABS_MT_TRACKING_ID -1
+SYN_REPORT 450000

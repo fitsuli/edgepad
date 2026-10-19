@@ -2,10 +2,10 @@ use std::fs;
 use std::io;
 use std::os::fd::{AsRawFd, RawFd};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, UNIX_EPOCH};
 
 use evdev::raw_stream::RawDevice;
-use evdev::{AbsoluteAxisCode, Device, KeyCode, PropType};
+use evdev::{AbsoluteAxisCode, Device, EventType, KeyCode, PropType};
 
 use crate::core::Capabilities;
 use crate::raw::ABS_MT_TRACKING_ID;
@@ -115,6 +115,82 @@ pub fn discover_device_report(input_root: &Path) -> io::Result<DiscoveryReport> 
         event_node_count,
         unreadable_count,
     })
+}
+
+/// Reads keyboards without grabbing them, for the typing lockout. Only the time
+/// of the latest key press leaves this type; key codes are never kept.
+#[derive(Default)]
+pub struct KeyboardMonitor {
+    input_root: PathBuf,
+    keyboards: Vec<RawDevice>,
+}
+
+impl KeyboardMonitor {
+    pub fn new(input_root: PathBuf, typing_lockout: Duration) -> Self {
+        let mut monitor = Self {
+            input_root,
+            keyboards: Vec::new(),
+        };
+        monitor.reconfigure(typing_lockout);
+        monitor
+    }
+
+    /// A zero lockout closes every keyboard and opens none.
+    pub fn reconfigure(&mut self, typing_lockout: Duration) {
+        self.keyboards = if typing_lockout.is_zero() {
+            Vec::new()
+        } else {
+            event_device_paths(&self.input_root)
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|path| RawDevice::open(path).ok())
+                .filter(|device| {
+                    is_typing_keyboard(device.name().unwrap_or_default(), device.supported_keys())
+                })
+                .collect()
+        };
+    }
+
+    pub fn names(&self) -> Vec<String> {
+        self.keyboards
+            .iter()
+            .map(|device| device.name().unwrap_or("unknown").to_string())
+            .collect()
+    }
+
+    /// Drains queued events without blocking. A keyboard that fails to read,
+    /// such as one that was unplugged, is dropped.
+    pub fn latest_press(&mut self) -> Option<Duration> {
+        let mut latest = None;
+        self.keyboards
+            .retain_mut(|device| match latest_queued_press(device) {
+                Ok(pressed_at) => {
+                    latest = latest.max(pressed_at);
+                    true
+                }
+                Err(_) => false,
+            });
+        latest
+    }
+}
+
+fn latest_queued_press(device: &mut RawDevice) -> io::Result<Option<Duration>> {
+    let mut latest = None;
+    while wait_for_raw_device_events(device, Duration::ZERO)? {
+        let batch_latest = device
+            .fetch_events()?
+            .filter(|event| event.event_type() == EventType::KEY && event.value() != 0)
+            .filter_map(|event| event.timestamp().duration_since(UNIX_EPOCH).ok())
+            .max();
+        latest = latest.max(batch_latest);
+    }
+    Ok(latest)
+}
+
+// edgepad-keys, the slider's own virtual keyboard, lacks letter keys, but skip
+// edgepad devices by name too so a slide can never lock out the next one.
+fn is_typing_keyboard(name: &str, keys: Option<&evdev::AttributeSetRef<KeyCode>>) -> bool {
+    !name.starts_with("edgepad") && keys.is_some_and(|keys| keys.contains(KeyCode::KEY_A))
 }
 
 pub fn wait_for_raw_device_events(device: &RawDevice, timeout: Duration) -> io::Result<bool> {

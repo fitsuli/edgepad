@@ -23,6 +23,7 @@ ABS_MT_SLOT <slot>
 ABS_MT_TRACKING_ID <id|-1>
 ABS_MT_POSITION_X <x>
 ABS_MT_POSITION_Y <y>
+ABS_MT_TOOL_TYPE <tool>
 SYN_REPORT <timestamp_us>
 SYN_DROPPED <timestamp_us>
 ```
@@ -130,7 +131,7 @@ tests/fixtures/duplicate-tracking-id.ev
 tests/fixtures/syn-dropped-reset.ev
 ```
 
-These cover the minimum lifecycle cases before real device I/O: claimed edge contact, normal passthrough contact, mixed claimed/passthrough slots in one stream, duplicate tracking ID rejection, and `SYN_DROPPED` recovery.
+These cover the minimum lifecycle cases before real device I/O: claimed edge contact, normal passthrough contact, edge and center contacts landing together as a two-finger gesture, duplicate tracking ID rejection, and `SYN_DROPPED` recovery.
 
 ## Inspecting captures manually
 

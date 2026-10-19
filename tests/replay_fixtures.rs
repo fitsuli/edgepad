@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use edgepad::core::{
     AxisRange, Capabilities, EdgeWidths, Engine, EngineOptions, Event, FrameOutput, Gesture,
-    GestureDirection, SlotError, Zone, ZoneSet,
+    GestureDirection, SliderAxis, SliderSpec, SlotError, Zone, ZoneSet,
 };
 use edgepad::replay::{parse_frames, run_frames, ReplayError, ReplayFrame};
 
@@ -126,30 +126,130 @@ fn center_touch_fixture_passes_through_from_down_to_release() {
 }
 
 #[test]
-fn mixed_edge_and_center_fixture_claims_only_edge_slot() {
+fn mixed_edge_and_center_fixture_passes_both_contacts_through() {
     let outputs = run_fixture(include_str!("fixtures/mixed-edge-and-center.ev"))
         .expect("mixed fixture should run through engine");
 
     assert_eq!(
         collect_passthrough(&outputs),
         vec![
+            Event::slot(0),
+            Event::tracking_id(100),
+            Event::x(20),
+            Event::y(300),
             Event::slot(1),
             Event::tracking_id(200),
             Event::x(500),
             Event::y(300),
+            Event::slot(0),
+            Event::x(220),
+            Event::y(310),
             Event::slot(1),
             Event::x(510),
             Event::y(310),
+            Event::slot(0),
+            Event::tracking_id(-1),
             Event::slot(1),
             Event::tracking_id(-1),
         ]
     );
+    assert!(collect_gestures(&outputs).is_empty());
+}
 
+#[test]
+fn palm_starting_in_edge_zone_passes_through_without_gesture() {
+    let outputs = run_fixture(include_str!("fixtures/left-edge-palm-passthrough.ev"))
+        .expect("edge palm fixture should run through engine");
+
+    assert_eq!(
+        collect_passthrough(&outputs),
+        vec![
+            Event::slot(0),
+            Event::tracking_id(400),
+            Event::x(20),
+            Event::y(300),
+            Event::tool_type(2),
+            Event::slot(0),
+            Event::x(220),
+            Event::y(310),
+            Event::slot(0),
+            Event::tracking_id(-1),
+        ]
+    );
+    assert!(collect_gestures(&outputs).is_empty());
+}
+
+#[test]
+fn edge_contact_turning_palm_passes_through_without_gesture_or_slider_step() {
+    let input = include_str!("fixtures/left-edge-finger-becomes-palm.ev");
+    let expected_passthrough = vec![
+        Event::slot(0),
+        Event::tracking_id(500),
+        Event::tool_type(2),
+        Event::x(20),
+        Event::y(300),
+        Event::y(500),
+        Event::slot(0),
+        Event::tracking_id(-1),
+    ];
+
+    let swipe_outputs = run_fixture(input).expect("fixture should run as a swipe candidate");
+    assert_eq!(collect_passthrough(&swipe_outputs), expected_passthrough);
+    assert!(collect_gestures(&swipe_outputs).is_empty());
+
+    let mut slider_engine = Engine::with_sliders(
+        test_caps(),
+        EdgeWidths::all(0.10),
+        vec![SliderSpec {
+            zone: Zone::Left,
+            axis: SliderAxis::Vertical,
+            step: 0.09,
+        }],
+    );
+    let frames = parse_frames(input).expect("fixture should parse");
+    let slider_outputs =
+        run_frames(&mut slider_engine, &frames).expect("fixture should run on a slider");
+    assert_eq!(collect_passthrough(&slider_outputs), expected_passthrough);
+    assert!(collect_gestures(&slider_outputs).is_empty());
+    assert!(slider_outputs
+        .iter()
+        .all(|output| output.slider_steps.is_empty()));
+}
+
+#[test]
+fn slot_tool_type_carries_over_when_kernel_omits_unchanged_value() {
+    let outputs = run_fixture(include_str!("fixtures/palm-tool-type-retained-in-slot.ev"))
+        .expect("tool type retention fixture should run through engine");
+
+    assert_eq!(
+        collect_passthrough(&outputs),
+        vec![
+            Event::slot(0),
+            Event::tracking_id(600),
+            Event::x(500),
+            Event::y(300),
+            Event::tool_type(2),
+            Event::slot(0),
+            Event::tracking_id(-1),
+            Event::slot(0),
+            Event::tracking_id(601),
+            Event::x(20),
+            Event::tool_type(2),
+            Event::slot(0),
+            Event::tracking_id(-1),
+            Event::slot(0),
+            Event::tracking_id(603),
+            Event::x(500),
+            Event::tool_type(0),
+            Event::slot(0),
+            Event::tracking_id(-1),
+        ]
+    );
     let gestures = collect_gestures(&outputs);
     assert_eq!(gestures.len(), 1);
-    assert_eq!(gestures[0].slot, 0);
+    assert_eq!(gestures[0].tracking_id, 602);
     assert_eq!(gestures[0].zone, Zone::Left);
-    assert_eq!(gestures[0].direction, GestureDirection::Right);
+    assert_eq!(gestures[0].direction, GestureDirection::Tap);
 }
 
 #[test]

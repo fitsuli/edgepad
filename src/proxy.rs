@@ -19,18 +19,20 @@ use crate::core::{
 };
 #[cfg(test)]
 use crate::core::{Event, SliderAxis, ZoneSet};
-use crate::device::{mt_slot_values, physical_touch_is_down, wait_for_raw_device_events};
+use crate::device::{
+    mt_slot_values, physical_touch_is_down, wait_for_raw_device_events, KeyboardMonitor,
+};
 use crate::dump::capabilities_from_raw_device;
 use crate::raw::{
     extract_core_events, is_pointer_button_code, route_raw_frame, route_recognition_deadline,
     route_resync_contacts, RawEvent, RawFrame, RawOutputComposer, RawOutputSink,
-    RecordingRawOutputSink, ABS_MT_POSITION_X, ABS_MT_POSITION_Y, ABS_MT_SLOT, ABS_MT_TRACKING_ID,
-    BTN_TOUCH, EV_ABS, EV_KEY, EV_SYN, SYN_DROPPED, SYN_REPORT,
+    RecordingRawOutputSink, ABS_MT_POSITION_X, ABS_MT_POSITION_Y, ABS_MT_SLOT, ABS_MT_TOOL_TYPE,
+    ABS_MT_TRACKING_ID, BTN_TOUCH, EV_ABS, EV_KEY, EV_SYN, SYN_DROPPED, SYN_REPORT,
 };
 use crate::uinput::{
     build_virtual_touchpad, UinputEventWriter, UinputRawOutputSink, VirtualTouchpadSpec,
 };
-use evdev::{raw_stream::RawDevice, PropType};
+use evdev::{raw_stream::RawDevice, AbsoluteAxisCode, PropType};
 
 pub use crate::config::DEFAULT_EDGE_WIDTH;
 
@@ -52,6 +54,7 @@ struct ProxyLoopConfig {
     slider_specs: Vec<SliderSpec>,
     initial_slot_positions: Vec<SlotPosition>,
     buttonpad: bool,
+    input_root: PathBuf,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -184,6 +187,8 @@ pub enum ProxyMode {
 #[derive(Debug, Clone)]
 pub struct ProxyRunConfig {
     pub device_path: PathBuf,
+    /// Where the typing lockout looks for keyboards.
+    pub input_root: PathBuf,
     pub limit: ProxyRunLimit,
     pub edge_widths: EdgeWidths,
     pub engine_options: EngineOptions,
@@ -363,6 +368,7 @@ where
             slider_specs: config.slider_specs.clone(),
             initial_slot_positions,
             buttonpad,
+            input_root: config.input_root.clone(),
         },
         &config.limit,
         &mut sink,
@@ -441,6 +447,7 @@ where
             slider_specs: config.slider_specs.clone(),
             initial_slot_positions,
             buttonpad,
+            input_root: config.input_root.clone(),
         },
         &config.limit,
         &mut sink,
@@ -507,9 +514,15 @@ fn read_resync_slot_snapshot(
         .map_err(|err| format!("failed to read current multitouch X positions: {err}"))?;
     let y_values = mt_slot_values(device, capabilities, ABS_MT_POSITION_Y)
         .map_err(|err| format!("failed to read current multitouch Y positions: {err}"))?;
-    let contacts =
-        resync_contacts_from_slot_values(capabilities, &tracking_ids, &x_values, &y_values);
-    let positions = slot_positions_from_values(capabilities, x_values, y_values);
+    let tool_types = read_slot_tool_types(device, capabilities)?;
+    let contacts = resync_contacts_from_slot_values(
+        capabilities,
+        &tracking_ids,
+        &x_values,
+        &y_values,
+        tool_types.as_deref(),
+    );
+    let positions = slot_positions_from_values(capabilities, x_values, y_values, tool_types);
     Ok((contacts, positions))
 }
 
@@ -521,13 +534,35 @@ fn read_slot_positions(
         .map_err(|err| format!("failed to read current multitouch X positions: {err}"))?;
     let y_values = mt_slot_values(device, capabilities, ABS_MT_POSITION_Y)
         .map_err(|err| format!("failed to read current multitouch Y positions: {err}"))?;
-    Ok(slot_positions_from_values(capabilities, x_values, y_values))
+    let tool_types = read_slot_tool_types(device, capabilities)?;
+    Ok(slot_positions_from_values(
+        capabilities,
+        x_values,
+        y_values,
+        tool_types,
+    ))
+}
+
+fn read_slot_tool_types(
+    device: &RawDevice,
+    capabilities: Capabilities,
+) -> Result<Option<Vec<i32>>, String> {
+    if !device
+        .supported_absolute_axes()
+        .is_some_and(|axes| axes.contains(AbsoluteAxisCode::ABS_MT_TOOL_TYPE))
+    {
+        return Ok(None);
+    }
+    mt_slot_values(device, capabilities, ABS_MT_TOOL_TYPE)
+        .map(Some)
+        .map_err(|err| format!("failed to read current multitouch tool types: {err}"))
 }
 
 fn slot_positions_from_values(
     capabilities: Capabilities,
     x_values: Vec<i32>,
     y_values: Vec<i32>,
+    tool_types: Option<Vec<i32>>,
 ) -> Vec<SlotPosition> {
     x_values
         .into_iter()
@@ -537,6 +572,7 @@ fn slot_positions_from_values(
             slot: capabilities.slot_min + index as i32,
             x,
             y,
+            tool_type: tool_types.as_ref().map(|tool_types| tool_types[index]),
         })
         .collect()
 }
@@ -558,6 +594,7 @@ fn resync_contacts_from_slot_values(
     tracking_ids: &[i32],
     x_values: &[i32],
     y_values: &[i32],
+    tool_types: Option<&[i32]>,
 ) -> Vec<ResyncContact> {
     tracking_ids
         .iter()
@@ -570,6 +607,7 @@ fn resync_contacts_from_slot_values(
                 tracking_id: *tracking_id,
                 x: *x,
                 y: *y,
+                tool_type: tool_types.map(|tool_types| tool_types[index]),
             })
         })
         .collect()
@@ -651,6 +689,10 @@ where
     let mut pending = PendingRawFrame::default();
     let mut resync_pending = false;
     let mut recognition_deadline = RecognitionDeadline::default();
+    let mut keyboards = KeyboardMonitor::new(
+        config.input_root.clone(),
+        config.engine_options.typing_lockout,
+    );
 
     loop {
         let mut timeout = drain_deadline
@@ -663,7 +705,11 @@ where
                     .unwrap_or(recognition_timeout),
             );
         }
-        let Some(events) = fetch_proxy_events(device, timeout)? else {
+        let fetched = fetch_proxy_events(device, timeout)?;
+        if let Some(pressed_at) = keyboards.latest_press() {
+            engine.record_key_press(pressed_at);
+        }
+        let Some(events) = fetched else {
             if let Some(input_deadline) = recognition_deadline.take_due(Instant::now()) {
                 process_proxy_recognition_deadline(
                     input_deadline,
@@ -691,6 +737,7 @@ where
                     &mut engine,
                     touch_state.is_touch_down(),
                     handler,
+                    &mut keyboards,
                 ) as usize;
             }
             drain_deadline = sync_physical_drain_deadline(
@@ -753,6 +800,7 @@ where
                         &mut engine,
                         touch_state.is_touch_down(),
                         handler,
+                        &mut keyboards,
                     ) as usize;
                     drain_deadline = sync_physical_drain_deadline(
                         drain_deadline,
@@ -791,6 +839,7 @@ where
                         &mut engine,
                         touch_state.is_touch_down(),
                         handler,
+                        &mut keyboards,
                     ) as usize;
                     drain_deadline = sync_physical_drain_deadline(
                         drain_deadline,
@@ -826,6 +875,7 @@ fn apply_pending_recognition_reload<H>(
     engine: &mut Engine,
     physical_touch_down: bool,
     handler: &mut H,
+    keyboards: &mut KeyboardMonitor,
 ) -> bool
 where
     H: GestureHandler,
@@ -839,6 +889,7 @@ where
     let Some(reloaded) = handler.take_recognition_config_reload() else {
         return false;
     };
+    keyboards.reconfigure(reloaded.engine_options.typing_lockout);
     engine.reconfigure_recognition(
         reloaded.edge_widths,
         reloaded.slider_specs,
@@ -1282,10 +1333,8 @@ impl PhysicalTouchState {
     fn observe_frame(&mut self, frame: &RawFrame) {
         for event in &frame.events {
             match (event.kind, event.code) {
-                (EV_ABS, ABS_MT_SLOT) => {
-                    if self.slot_index(event.value).is_some() {
-                        self.current_slot = event.value;
-                    }
+                (EV_ABS, ABS_MT_SLOT) if self.slot_index(event.value).is_some() => {
+                    self.current_slot = event.value;
                 }
                 (EV_ABS, ABS_MT_TRACKING_ID) if event.value >= 0 => {
                     if let Some(index) = self.slot_index(self.current_slot) {
@@ -1375,6 +1424,7 @@ mod tests {
             slider_specs: Vec::new(),
             initial_slot_positions: Vec::new(),
             buttonpad: true,
+            input_root: PathBuf::new(),
         };
         let mut engine = Engine::new(capabilities, config.edge_widths);
         engine
@@ -1382,6 +1432,7 @@ mod tests {
                 slot: 0,
                 x: 20,
                 y: 300,
+                tool_type: None,
             }])
             .expect("slot state should seed");
         engine.set_buttonpad(true);
@@ -1402,7 +1453,8 @@ mod tests {
         assert!(!apply_pending_recognition_reload(
             &mut engine,
             true,
-            &mut handler
+            &mut handler,
+            &mut KeyboardMonitor::default(),
         ));
         assert_eq!(handler.reload_polls, 0);
         assert!(handler.pending.is_some());
@@ -1410,7 +1462,8 @@ mod tests {
         assert!(apply_pending_recognition_reload(
             &mut engine,
             false,
-            &mut handler
+            &mut handler,
+            &mut KeyboardMonitor::default(),
         ));
         assert_eq!(handler.reload_polls, 1);
         assert!(handler.pending.is_none());
@@ -1564,6 +1617,7 @@ mod tests {
             slider_specs: Vec::new(),
             initial_slot_positions: Vec::new(),
             buttonpad: false,
+            input_root: PathBuf::new(),
         };
         let mut engine = Engine::with_options(
             capabilities,
@@ -1604,7 +1658,8 @@ mod tests {
         assert!(!apply_pending_recognition_reload(
             &mut engine,
             false,
-            &mut handler
+            &mut handler,
+            &mut KeyboardMonitor::default(),
         ));
         assert_eq!(handler.reload_polls, 0);
 
@@ -1612,7 +1667,8 @@ mod tests {
         assert!(apply_pending_recognition_reload(
             &mut engine,
             false,
-            &mut handler
+            &mut handler,
+            &mut KeyboardMonitor::default(),
         ));
         assert_eq!(handler.reload_polls, 1);
     }
@@ -1644,12 +1700,12 @@ mod tests {
         assert_eq!(stats.raw_frames, 1);
         assert_eq!(stats.raw_events, 11);
         assert_eq!(stats.recognizer_events, 8);
-        assert_eq!(stats.recognizer_passthrough_events, 4);
-        assert_eq!(stats.claimed_edge_frames, 1);
+        assert_eq!(stats.recognizer_passthrough_events, 8);
+        assert_eq!(stats.claimed_edge_frames, 0);
         assert_eq!(stats.passthrough_frames, 1);
         assert_eq!(stats.empty_output_frames, 0);
         assert_eq!(stats.composed_frames, 1);
-        assert_eq!(stats.composed_events, 8);
+        assert_eq!(stats.composed_events, 12);
         assert_eq!(stats.gestures.len(), 0);
         assert!(stats.gesture_counts.is_empty());
         assert!(!stats.resync_required);
@@ -2088,6 +2144,7 @@ mod tests {
             &[-1, 501, -1],
             &[10, 20, 30],
             &[40, 50, 60],
+            Some(&[0, 2, 0]),
         );
 
         assert_eq!(
@@ -2097,6 +2154,7 @@ mod tests {
                 tracking_id: 501,
                 x: 20,
                 y: 50,
+                tool_type: Some(2),
             }]
         );
     }
@@ -2258,9 +2316,122 @@ mod tests {
     }
 
     #[test]
+    fn proxy_hands_slider_contact_flagged_as_palm_to_virtual_touchpad() {
+        let capabilities = test_capabilities();
+        let mut engine = Engine::with_sliders(
+            capabilities,
+            EdgeWidths::all(0.10),
+            vec![SliderSpec {
+                zone: Zone::Right,
+                axis: SliderAxis::Vertical,
+                step: 0.09,
+            }],
+        );
+        let mut composer = RawOutputComposer::new(capabilities);
+        let mut sink = RecordingRawOutputSink::default();
+        let mut stats = ProxyRuntimeStats::default();
+        let mut handler = RecordingGestureHandler::default();
+        let frames = [
+            RawFrame::new(vec![
+                RawEvent::abs_mt_slot(0),
+                RawEvent::abs_mt_tracking_id(300),
+                RawEvent::abs_mt_tool_type(0),
+                RawEvent::abs_mt_position_x(980),
+                RawEvent::abs_mt_position_y(400),
+            ]),
+            RawFrame::new(vec![
+                RawEvent::abs_mt_tool_type(2),
+                RawEvent::abs_mt_position_y(610),
+            ]),
+            RawFrame::new(vec![RawEvent::abs_mt_tracking_id(-1)]),
+        ];
+
+        for frame in &frames {
+            process_proxy_frame_with_handler(
+                &mut engine,
+                &mut composer,
+                &mut sink,
+                &mut stats,
+                frame,
+                &mut handler,
+            )
+            .expect("palm frames should process");
+        }
+
+        assert!(handler.slider_steps.is_empty());
+        assert!(handler.gestures.is_empty());
+        assert_eq!(
+            sink.frames()
+                .iter()
+                .map(|frame| frame.events.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                vec![
+                    RawEvent::abs_mt_slot(0),
+                    RawEvent::abs_mt_tracking_id(300),
+                    RawEvent::abs_mt_tool_type(2),
+                    RawEvent::abs_mt_position_x(980),
+                    RawEvent::abs_mt_position_y(400),
+                    RawEvent::abs_mt_position_y(610),
+                    RawEvent::btn_touch(true),
+                    RawEvent::btn_tool_finger(true),
+                    RawEvent::abs_x(980),
+                    RawEvent::abs_y(610),
+                ],
+                vec![
+                    RawEvent::abs_mt_slot(0),
+                    RawEvent::abs_mt_tracking_id(-1),
+                    RawEvent::btn_touch(false),
+                    RawEvent::btn_tool_finger(false),
+                ],
+            ]
+        );
+    }
+
+    #[test]
+    fn palm_left_in_slot_before_startup_is_seeded_and_not_claimed() {
+        let capabilities = test_capabilities();
+        let mut engine = Engine::new(capabilities, EdgeWidths::all(0.10));
+        engine
+            .seed_slot_positions(&[SlotPosition {
+                slot: 0,
+                x: 20,
+                y: 300,
+                tool_type: Some(2),
+            }])
+            .expect("slot state should seed");
+        let mut composer = RawOutputComposer::new(capabilities);
+        let mut sink = RecordingRawOutputSink::default();
+        let mut stats = ProxyRuntimeStats::default();
+        let frames = [
+            RawFrame::new(vec![RawEvent::abs_mt_tracking_id(400)]),
+            RawFrame::new(vec![RawEvent::abs_mt_position_x(220)]),
+            RawFrame::new(vec![RawEvent::abs_mt_tracking_id(-1)]),
+        ];
+
+        for frame in &frames {
+            process_proxy_frame(&mut engine, &mut composer, &mut sink, &mut stats, frame)
+                .expect("palm frames should process");
+        }
+
+        assert!(stats.gestures.is_empty());
+        assert_eq!(
+            sink.frames()[0].events,
+            vec![
+                RawEvent::abs_mt_slot(0),
+                RawEvent::abs_mt_tracking_id(400),
+                RawEvent::abs_mt_tool_type(2),
+                RawEvent::btn_touch(true),
+                RawEvent::btn_tool_finger(true),
+            ]
+        );
+    }
+
+    #[test]
     fn proxy_summary_preserves_runtime_metadata() {
         let config = ProxyRunConfig {
             device_path: PathBuf::from("/dev/input/event7"),
+            input_root: PathBuf::from("/dev/input"),
             limit: ProxyRunLimit::Frames {
                 frame_boundaries: 12,
                 stop_after_limit: StopAfterFrameLimit::Immediately,

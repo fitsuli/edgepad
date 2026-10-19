@@ -24,8 +24,9 @@ use crate::device::{
 pub const DEFAULT_EDGE_WIDTH: f32 = 0.10;
 pub const DEFAULT_SLIDER_STEP: f32 = 0.04;
 pub use crate::core::{
-    DEFAULT_DOUBLE_TAP_MAX_DISTANCE, DEFAULT_DOUBLE_TAP_TIMEOUT_MS, DEFAULT_SWIPE_MIN_DISTANCE,
-    DEFAULT_TAP_MAX_DURATION_MS, DEFAULT_TAP_MIN_DURATION_MS,
+    DEFAULT_DOUBLE_TAP_MAX_DISTANCE, DEFAULT_DOUBLE_TAP_TIMEOUT_MS,
+    DEFAULT_SIDE_EDGE_TOP_DEAD_ZONE, DEFAULT_SLIDER_DELAY_MS, DEFAULT_SWIPE_MIN_DISTANCE,
+    DEFAULT_TAP_MAX_DURATION_MS, DEFAULT_TAP_MIN_DURATION_MS, DEFAULT_TYPING_LOCKOUT_MS,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -38,6 +39,9 @@ pub struct EdgepadConfig {
     pub double_tap_timeout_ms: u64,
     pub double_tap_max_distance: f32,
     pub swipe_min_distance: f32,
+    pub slider_delay_ms: u64,
+    pub side_edge_top_dead_zone: f32,
+    pub typing_lockout_ms: u64,
     pub gestures: Vec<GestureBindingConfig>,
     pub sliders: Vec<SliderBindingConfig>,
 }
@@ -61,6 +65,9 @@ impl Default for EdgepadConfig {
             double_tap_timeout_ms: DEFAULT_DOUBLE_TAP_TIMEOUT_MS,
             double_tap_max_distance: DEFAULT_DOUBLE_TAP_MAX_DISTANCE,
             swipe_min_distance: DEFAULT_SWIPE_MIN_DISTANCE,
+            slider_delay_ms: DEFAULT_SLIDER_DELAY_MS,
+            side_edge_top_dead_zone: DEFAULT_SIDE_EDGE_TOP_DEAD_ZONE,
+            typing_lockout_ms: DEFAULT_TYPING_LOCKOUT_MS,
             gestures: Vec::new(),
             sliders: Vec::new(),
         }
@@ -90,7 +97,7 @@ impl EdgepadConfig {
         };
         if let Some(tap_min_duration_ms) = raw.tap_min_duration_ms {
             config.tap_min_duration_ms =
-                validate_tap_min_duration_ms(tap_min_duration_ms, "tap_min_duration_ms")?;
+                validate_duration_ms(tap_min_duration_ms, "tap_min_duration_ms")?;
         }
         if let Some(tap_max_duration_ms) = raw.tap_max_duration_ms {
             config.tap_max_duration_ms =
@@ -112,6 +119,17 @@ impl EdgepadConfig {
         if let Some(swipe_min_distance) = raw.swipe_min_distance {
             config.swipe_min_distance =
                 validate_swipe_min_distance(swipe_min_distance, "swipe_min_distance")?;
+        }
+        if let Some(slider_delay_ms) = raw.slider_delay_ms {
+            config.slider_delay_ms = validate_duration_ms(slider_delay_ms, "slider_delay_ms")?;
+        }
+        if let Some(side_edge_top_dead_zone) = raw.side_edge_top_dead_zone {
+            config.side_edge_top_dead_zone =
+                validate_side_edge_top_dead_zone(side_edge_top_dead_zone)?;
+        }
+        if let Some(typing_lockout_ms) = raw.typing_lockout_ms {
+            config.typing_lockout_ms =
+                validate_duration_ms(typing_lockout_ms, "typing_lockout_ms")?;
         }
 
         for (index, raw_binding) in raw.gestures.into_iter().enumerate() {
@@ -201,6 +219,9 @@ impl EdgepadConfig {
             single_tap_zones: ZoneSet::from_zones(self.gestures.iter().filter_map(|binding| {
                 (binding.direction == GestureDirection::Tap).then_some(binding.zone)
             })),
+            slider_delay: Duration::from_millis(self.slider_delay_ms),
+            side_edge_top_dead_zone: self.side_edge_top_dead_zone,
+            typing_lockout: Duration::from_millis(self.typing_lockout_ms),
         }
     }
 
@@ -462,7 +483,7 @@ fn validate_slider_step(parsed: f32, name: &str) -> Result<f32, String> {
     Ok(parsed)
 }
 
-fn validate_tap_min_duration_ms(parsed: u64, name: &str) -> Result<u64, String> {
+fn validate_duration_ms(parsed: u64, name: &str) -> Result<u64, String> {
     if parsed > 10_000 {
         return Err(format!("{name} must be <= 10000"));
     }
@@ -486,6 +507,13 @@ fn validate_double_tap_timeout_ms(parsed: u64, name: &str) -> Result<u64, String
 fn validate_double_tap_max_distance(parsed: f32, name: &str) -> Result<f32, String> {
     if !parsed.is_finite() || parsed <= 0.0 || parsed > 1.0 {
         return Err(format!("{name} must be > 0 and <= 1"));
+    }
+    Ok(parsed)
+}
+
+fn validate_side_edge_top_dead_zone(parsed: f32) -> Result<f32, String> {
+    if !(0.0..1.0).contains(&parsed) {
+        return Err("side_edge_top_dead_zone must be >= 0 and < 1".to_string());
     }
     Ok(parsed)
 }
@@ -645,6 +673,9 @@ struct RawEdgepadConfig {
     double_tap_timeout_ms: Option<u64>,
     double_tap_max_distance: Option<f32>,
     swipe_min_distance: Option<f32>,
+    slider_delay_ms: Option<u64>,
+    side_edge_top_dead_zone: Option<f32>,
+    typing_lockout_ms: Option<u64>,
     #[serde(default)]
     gestures: Vec<RawGestureBindingConfig>,
     #[serde(default)]
@@ -821,6 +852,43 @@ mod tests {
             DEFAULT_DOUBLE_TAP_MAX_DISTANCE
         );
         assert_eq!(config.swipe_min_distance, DEFAULT_SWIPE_MIN_DISTANCE);
+        assert_eq!(config.slider_delay_ms, DEFAULT_SLIDER_DELAY_MS);
+        assert_eq!(config.side_edge_top_dead_zone, 0.0);
+        assert_eq!(config.typing_lockout_ms, DEFAULT_TYPING_LOCKOUT_MS);
+    }
+
+    #[test]
+    fn edgepad_config_parses_side_edge_dead_zone_and_typing_lockout() {
+        let config = EdgepadConfig::parse("side_edge_top_dead_zone = 0.25\ntyping_lockout_ms = 0")
+            .expect("filters should parse");
+
+        let options = config.engine_options();
+        assert_eq!(options.side_edge_top_dead_zone, 0.25);
+        assert_eq!(options.typing_lockout, Duration::ZERO);
+        assert_eq!(
+            EdgepadConfig::parse("side_edge_top_dead_zone = 1.0")
+                .err()
+                .as_deref(),
+            Some("side_edge_top_dead_zone must be >= 0 and < 1")
+        );
+    }
+
+    #[test]
+    fn edgepad_config_slider_delay_can_be_tuned_or_disabled() {
+        let tuned = EdgepadConfig::parse("slider_delay_ms = 250").expect("delay should parse");
+        let disabled = EdgepadConfig::parse("slider_delay_ms = 0").expect("zero should parse");
+
+        assert_eq!(
+            tuned.engine_options().slider_delay,
+            Duration::from_millis(250)
+        );
+        assert_eq!(disabled.engine_options().slider_delay, Duration::ZERO);
+        assert_eq!(
+            EdgepadConfig::parse("slider_delay_ms = 10001")
+                .err()
+                .as_deref(),
+            Some("slider_delay_ms must be <= 10000")
+        );
     }
 
     #[test]

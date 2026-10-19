@@ -5,6 +5,7 @@ use std::fs::{self, OpenOptions};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 use evdev::Device;
 
@@ -13,7 +14,9 @@ use crate::config::{
     GestureActionConfig,
 };
 use crate::core::{EdgeWidths, GestureDirection, SliderDirection, Zone};
-use crate::device::{discover_device_report, format_device_line, touchpad_candidates};
+use crate::device::{
+    discover_device_report, format_device_line, touchpad_candidates, KeyboardMonitor,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DoctorConfig {
@@ -158,6 +161,13 @@ pub fn run_doctor(config: &DoctorConfig) -> DoctorReport {
 
     let touchpad_readable = check_touchpad_readable(touchpad_path.as_deref(), &mut report);
     let uinput_readable = check_uinput(&config.uinput_path, &mut report);
+    if let Some(loaded_config) = loaded_config.as_ref() {
+        check_typing_lockout_keyboards(
+            loaded_config.typing_lockout_ms,
+            &config.input_root,
+            &mut report,
+        );
+    }
     let device_access_ok = touchpad_readable && uinput_readable;
     check_uaccess_tags(
         touchpad_path.as_deref(),
@@ -766,6 +776,42 @@ fn check_uinput(path: &Path, report: &mut DoctorReport) -> bool {
             false
         }
     }
+}
+
+fn check_typing_lockout_keyboards(lockout_ms: u64, input_root: &Path, report: &mut DoctorReport) {
+    if lockout_ms == 0 {
+        report.checks.push(DoctorCheck::new(
+            CheckStatus::Ok,
+            DoctorSection::Device,
+            "keyboards",
+            "typing lockout disabled; keyboards are not read",
+        ));
+        return;
+    }
+
+    let names =
+        KeyboardMonitor::new(input_root.to_path_buf(), Duration::from_millis(lockout_ms)).names();
+    if names.is_empty() {
+        report.checks.push(DoctorCheck::new(
+            CheckStatus::Warn,
+            DoctorSection::Device,
+            "keyboards",
+            format!(
+                "typing lockout ({lockout_ms} ms) has no read access to any keyboard under {}; edge touches right after typing are not filtered",
+                input_root.display()
+            ),
+        ));
+        return;
+    }
+    report.checks.push(DoctorCheck::new(
+        CheckStatus::Ok,
+        DoctorSection::Device,
+        "keyboards",
+        format!(
+            "typing lockout ({lockout_ms} ms) reads key press times from {}",
+            names.join(", ")
+        ),
+    ));
 }
 
 fn check_uaccess_tags(

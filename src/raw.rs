@@ -128,6 +128,10 @@ impl RawEvent {
     pub const fn abs_mt_position_y(y: i32) -> Self {
         Self::new(EV_ABS, ABS_MT_POSITION_Y, y)
     }
+
+    pub const fn abs_mt_tool_type(tool_type: i32) -> Self {
+        Self::new(EV_ABS, ABS_MT_TOOL_TYPE, tool_type)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -935,6 +939,7 @@ fn raw_event_for_core_event(event: Event) -> Option<RawEvent> {
         Event::TrackingId(tracking_id) => Some(RawEvent::abs_mt_tracking_id(tracking_id)),
         Event::X(x) => Some(RawEvent::abs_mt_position_x(x)),
         Event::Y(y) => Some(RawEvent::abs_mt_position_y(y)),
+        Event::ToolType(tool_type) => Some(RawEvent::abs_mt_tool_type(tool_type)),
         Event::SynDropped => None,
     }
 }
@@ -945,6 +950,7 @@ fn core_event_for_raw_event(event: RawEvent) -> Option<Event> {
         (EV_ABS, ABS_MT_TRACKING_ID) => Some(Event::tracking_id(event.value)),
         (EV_ABS, ABS_MT_POSITION_X) => Some(Event::x(event.value)),
         (EV_ABS, ABS_MT_POSITION_Y) => Some(Event::y(event.value)),
+        (EV_ABS, ABS_MT_TOOL_TYPE) => Some(Event::tool_type(event.value)),
         (EV_SYN, SYN_DROPPED) => Some(Event::syn_dropped()),
         _ => None,
     }

@@ -163,11 +163,11 @@ fn buttonpad_press_promotes_claimed_contact_and_cancels_edge_gesture() {
 }
 
 #[test]
-fn buttonpad_press_promotes_all_claimed_contacts_for_clickfinger() {
+fn edge_contacts_landing_together_pass_through_before_clickfinger_press() {
     let mut engine = Engine::new(test_caps(), EdgeWidths::all(0.10));
     engine.set_buttonpad(true);
 
-    engine
+    let output = engine
         .process_frame(&[
             Event::slot(0),
             Event::tracking_id(20),
@@ -181,7 +181,7 @@ fn buttonpad_press_promotes_all_claimed_contacts_for_clickfinger() {
         .expect("two edge contacts are valid");
 
     assert_eq!(
-        engine.update_physical_button(BTN_LEFT, true),
+        output.passthrough,
         vec![
             Event::slot(0),
             Event::tracking_id(20),
@@ -193,6 +193,7 @@ fn buttonpad_press_promotes_all_claimed_contacts_for_clickfinger() {
             Event::y(320),
         ]
     );
+    assert!(engine.update_physical_button(BTN_LEFT, true).is_empty());
 }
 
 #[test]
@@ -741,6 +742,7 @@ fn restored_contact_is_passthrough_until_release_even_when_it_is_on_an_edge() {
             tracking_id: 42,
             x: 20,
             y: 300,
+            tool_type: None,
         }])
         .expect("kernel snapshot should restore the active contact");
 
@@ -968,10 +970,8 @@ fn overlapping_contacts_cannot_form_a_temporal_double_tap() {
         )
         .expect("second contact should release");
 
-    assert_eq!(first_up.gestures.len(), 1);
-    assert_eq!(first_up.gestures[0].direction, GestureDirection::Tap);
-    assert_eq!(second_up.gestures.len(), 1);
-    assert_eq!(second_up.gestures[0].direction, GestureDirection::Tap);
+    assert!(first_up.gestures.is_empty());
+    assert!(second_up.gestures.is_empty());
     assert!(engine.next_deadline().is_none());
 }
 
@@ -1105,4 +1105,520 @@ fn syn_dropped_cancels_pending_tap_sequence() {
     assert!(dropped.resync_required);
     assert!(dropped.gestures.is_empty());
     assert!(engine.next_deadline().is_none());
+}
+
+fn left_slider_engine() -> Engine {
+    left_slider_engine_with(EngineOptions::default())
+}
+
+#[test]
+fn second_finger_inside_slider_delay_turns_edge_contact_into_scroll() {
+    let mut engine = left_slider_engine();
+    let at = Duration::from_millis;
+
+    let down = engine
+        .process_frame_at(
+            &[
+                Event::slot(0),
+                Event::tracking_id(30),
+                Event::x(20),
+                Event::y(300),
+            ],
+            at(1000),
+        )
+        .expect("edge contact should land");
+    let held = engine
+        .process_frame_at(&[Event::slot(0), Event::y(510)], at(1100))
+        .expect("edge contact should move");
+    let second = engine
+        .process_frame_at(
+            &[
+                Event::slot(1),
+                Event::tracking_id(31),
+                Event::x(400),
+                Event::y(320),
+            ],
+            at(1250),
+        )
+        .expect("second finger should land");
+    let scroll = engine
+        .process_frame_at(
+            &[Event::slot(0), Event::y(600), Event::slot(1), Event::y(620)],
+            at(1400),
+        )
+        .expect("both fingers should scroll");
+    let up = engine
+        .process_frame_at(
+            &[
+                Event::slot(0),
+                Event::tracking_id(-1),
+                Event::slot(1),
+                Event::tracking_id(-1),
+            ],
+            at(1500),
+        )
+        .expect("both fingers should lift");
+
+    assert!(down.passthrough.is_empty());
+    assert!(held.passthrough.is_empty());
+    assert_eq!(
+        second.passthrough,
+        vec![
+            Event::slot(0),
+            Event::tracking_id(30),
+            Event::x(20),
+            Event::y(510),
+            Event::slot(1),
+            Event::tracking_id(31),
+            Event::x(400),
+            Event::y(320),
+        ]
+    );
+    assert_eq!(
+        scroll.passthrough,
+        vec![Event::slot(0), Event::y(600), Event::slot(1), Event::y(620)]
+    );
+    for output in [&down, &held, &second, &scroll, &up] {
+        assert!(output.slider_steps.is_empty());
+        assert!(output.gestures.is_empty());
+    }
+}
+
+#[test]
+fn edge_contact_landing_while_another_finger_is_down_is_never_claimed() {
+    let mut engine = left_slider_engine();
+    let at = Duration::from_millis;
+
+    engine
+        .process_frame_at(
+            &[
+                Event::slot(0),
+                Event::tracking_id(32),
+                Event::x(400),
+                Event::y(300),
+            ],
+            at(1000),
+        )
+        .expect("center finger should land");
+    let edge = engine
+        .process_frame_at(
+            &[
+                Event::slot(1),
+                Event::tracking_id(33),
+                Event::x(20),
+                Event::y(300),
+            ],
+            at(1360),
+        )
+        .expect("edge finger should land late");
+    engine
+        .process_frame_at(&[Event::slot(0), Event::tracking_id(-1)], at(1400))
+        .expect("center finger should lift");
+    let alone = engine
+        .process_frame_at(&[Event::slot(1), Event::y(600)], at(2000))
+        .expect("edge finger should keep moving alone");
+
+    assert_eq!(
+        edge.passthrough,
+        vec![
+            Event::slot(1),
+            Event::tracking_id(33),
+            Event::x(20),
+            Event::y(300),
+        ]
+    );
+    assert_eq!(alone.passthrough, vec![Event::slot(1), Event::y(600)]);
+    assert!(alone.slider_steps.is_empty());
+}
+
+#[test]
+fn one_finger_slide_catches_up_on_first_frame_after_slider_delay() {
+    let mut engine = left_slider_engine();
+    let at = Duration::from_millis;
+
+    engine
+        .process_frame_at(
+            &[
+                Event::slot(0),
+                Event::tracking_id(34),
+                Event::x(20),
+                Event::y(300),
+            ],
+            at(1000),
+        )
+        .expect("edge contact should land");
+    let held = engine
+        .process_frame_at(&[Event::slot(0), Event::y(510)], at(1200))
+        .expect("edge contact should move");
+    let still_held = engine
+        .process_frame_at(&[], at(1290))
+        .expect("motionless frame should process");
+    let caught_up = engine
+        .process_frame_at(&[], at(1300))
+        .expect("motionless frame should release held steps");
+    let live = engine
+        .process_frame_at(&[Event::slot(0), Event::y(580)], at(1350))
+        .expect("edge contact should keep moving");
+
+    assert!(held.slider_steps.is_empty());
+    assert!(still_held.slider_steps.is_empty());
+    assert_eq!(caught_up.slider_steps.len(), 3);
+    assert!(caught_up
+        .slider_steps
+        .iter()
+        .all(|step| step.direction == SliderDirection::Down && step.tracking_id == 34));
+    assert_eq!(live.slider_steps.len(), 1);
+}
+
+#[test]
+fn one_finger_flick_shorter_than_slider_delay_steps_on_release_without_tap() {
+    let mut engine = left_slider_engine();
+    let at = Duration::from_millis;
+
+    engine
+        .process_frame_at(
+            &[
+                Event::slot(0),
+                Event::tracking_id(35),
+                Event::x(20),
+                Event::y(510),
+            ],
+            at(1000),
+        )
+        .expect("edge contact should land");
+    let held = engine
+        .process_frame_at(&[Event::slot(0), Event::y(300)], at(1080))
+        .expect("edge contact should flick up");
+    let up = engine
+        .process_frame_at(&[Event::slot(0), Event::tracking_id(-1)], at(1150))
+        .expect("edge contact should lift");
+
+    assert!(held.slider_steps.is_empty());
+    assert_eq!(up.slider_steps.len(), 3);
+    assert!(up
+        .slider_steps
+        .iter()
+        .all(|step| step.direction == SliderDirection::Up));
+    assert!(up.gestures.is_empty());
+}
+
+#[test]
+fn edge_contact_landing_as_the_other_finger_lifts_in_the_same_frame_is_not_claimed() {
+    let mut engine = left_slider_engine();
+    let at = Duration::from_millis;
+
+    engine
+        .process_frame_at(
+            &[
+                Event::slot(0),
+                Event::tracking_id(40),
+                Event::x(400),
+                Event::y(300),
+            ],
+            at(1000),
+        )
+        .expect("center finger should land");
+    let handover = engine
+        .process_frame_at(
+            &[
+                Event::slot(0),
+                Event::tracking_id(-1),
+                Event::slot(1),
+                Event::tracking_id(41),
+                Event::x(20),
+                Event::y(300),
+            ],
+            at(1500),
+        )
+        .expect("center finger lifts as edge finger lands");
+    let moved = engine
+        .process_frame_at(&[Event::slot(1), Event::y(600)], at(2000))
+        .expect("edge finger should keep moving");
+
+    assert_eq!(
+        handover.passthrough,
+        vec![
+            Event::slot(0),
+            Event::tracking_id(-1),
+            Event::slot(1),
+            Event::tracking_id(41),
+            Event::x(20),
+            Event::y(300),
+        ]
+    );
+    assert_eq!(moved.passthrough, vec![Event::slot(1), Event::y(600)]);
+    assert!(moved.slider_steps.is_empty());
+}
+
+#[test]
+fn steps_released_by_a_frame_wait_for_that_frames_palm_flag_or_second_finger() {
+    let at = Duration::from_millis;
+    let promoting_tails = [
+        vec![Event::tool_type(2)],
+        vec![
+            Event::slot(1),
+            Event::tracking_id(43),
+            Event::x(400),
+            Event::y(320),
+        ],
+    ];
+
+    for tail in promoting_tails {
+        let mut engine = left_slider_engine();
+        engine
+            .process_frame_at(
+                &[
+                    Event::slot(0),
+                    Event::tracking_id(42),
+                    Event::x(20),
+                    Event::y(300),
+                ],
+                at(1000),
+            )
+            .expect("edge contact should land");
+        let mut frame = vec![Event::slot(0), Event::y(510)];
+        frame.extend(tail.iter().copied());
+        let boundary = engine
+            .process_frame_at(&frame, at(1300))
+            .expect("delay boundary frame should process");
+
+        assert!(boundary.slider_steps.is_empty(), "{tail:?}");
+        assert_eq!(
+            boundary.passthrough[..2],
+            [Event::slot(0), Event::tracking_id(42)]
+        );
+    }
+
+    let mut engine = left_slider_engine();
+    engine
+        .process_frame_at(
+            &[
+                Event::slot(0),
+                Event::tracking_id(44),
+                Event::x(20),
+                Event::y(300),
+            ],
+            at(1000),
+        )
+        .expect("edge contact should land");
+    let moved_and_lifted = engine
+        .process_frame_at(
+            &[Event::slot(0), Event::y(510), Event::tracking_id(-1)],
+            at(1400),
+        )
+        .expect("edge contact should move and lift in one frame");
+    assert_eq!(moved_and_lifted.slider_steps.len(), 3);
+}
+
+fn left_slider_engine_with(options: EngineOptions) -> Engine {
+    Engine::with_options(
+        test_caps(),
+        EdgeWidths::all(0.10),
+        vec![SliderSpec {
+            zone: Zone::Left,
+            axis: SliderAxis::Vertical,
+            step: 0.09,
+        }],
+        EngineOptions {
+            slider_delay: Duration::from_millis(300),
+            ..options
+        },
+    )
+}
+
+#[test]
+fn side_edge_dead_zone_blocks_slides_that_start_near_the_keyboard_only() {
+    let mut engine = left_slider_engine_with(EngineOptions {
+        side_edge_top_dead_zone: 0.25,
+        ..EngineOptions::default()
+    });
+    let at = Duration::from_millis;
+
+    let high = engine
+        .process_frame_at(
+            &[
+                Event::slot(0),
+                Event::tracking_id(50),
+                Event::x(20),
+                Event::y(150),
+            ],
+            at(1000),
+        )
+        .expect("contact should land in the dead zone");
+    let high_slide = engine
+        .process_frame_at(&[Event::slot(0), Event::y(450)], at(1400))
+        .expect("contact should slide down");
+    engine
+        .process_frame_at(&[Event::slot(0), Event::tracking_id(-1)], at(1500))
+        .expect("contact should lift");
+
+    engine
+        .process_frame_at(
+            &[
+                Event::slot(0),
+                Event::tracking_id(51),
+                Event::x(20),
+                Event::y(400),
+            ],
+            at(2000),
+        )
+        .expect("contact should land below the dead zone");
+    let low_slide = engine
+        .process_frame_at(&[Event::slot(0), Event::y(50)], at(2400))
+        .expect("contact should slide up into the top quarter");
+
+    assert_eq!(
+        high.passthrough,
+        vec![
+            Event::slot(0),
+            Event::tracking_id(50),
+            Event::x(20),
+            Event::y(150),
+        ]
+    );
+    assert_eq!(high_slide.passthrough, vec![Event::slot(0), Event::y(450)]);
+    assert!(high_slide.slider_steps.is_empty());
+    assert!(low_slide.passthrough.is_empty());
+    assert_eq!(low_slide.slider_steps.len(), 5);
+    assert!(low_slide
+        .slider_steps
+        .iter()
+        .all(|step| step.direction == SliderDirection::Up));
+}
+
+#[test]
+fn diagonal_drag_from_slider_edge_becomes_pointer_motion_before_a_full_step() {
+    // Zenbook S14 axes. In raw units this move is diagonal (2 * 60 > 100);
+    // normalized per axis it would look vertical (2 * 0.015 < 0.042).
+    let mut engine = Engine::with_options(
+        Capabilities {
+            slot_min: 0,
+            slot_max: 1,
+            x: AxisRange { min: 0, max: 3911 },
+            y: AxisRange { min: 0, max: 2382 },
+        },
+        EdgeWidths::all(0.07),
+        vec![SliderSpec {
+            zone: Zone::Left,
+            axis: SliderAxis::Vertical,
+            step: 0.09,
+        }],
+        EngineOptions {
+            slider_delay: Duration::from_millis(300),
+            ..EngineOptions::default()
+        },
+    );
+    let at = Duration::from_millis;
+
+    let down = engine
+        .process_frame_at(
+            &[
+                Event::slot(0),
+                Event::tracking_id(60),
+                Event::x(150),
+                Event::y(1000),
+            ],
+            at(1000),
+        )
+        .expect("edge contact should land");
+    let diagonal = engine
+        .process_frame_at(&[Event::slot(0), Event::x(90), Event::y(1100)], at(1050))
+        .expect("edge contact should move diagonally");
+    let later = engine
+        .process_frame_at(&[Event::slot(0), Event::y(1700)], at(1400))
+        .expect("pointer contact should keep moving");
+
+    assert!(down.passthrough.is_empty());
+    assert_eq!(
+        diagonal.passthrough,
+        vec![
+            Event::slot(0),
+            Event::tracking_id(60),
+            Event::x(90),
+            Event::y(1100),
+        ]
+    );
+    assert_eq!(later.passthrough, vec![Event::slot(0), Event::y(1700)]);
+    assert!(later.slider_steps.is_empty());
+}
+
+#[test]
+fn sideways_drift_after_the_first_step_keeps_the_slide() {
+    let mut engine = left_slider_engine_with(EngineOptions::default());
+    let at = Duration::from_millis;
+
+    engine
+        .process_frame_at(
+            &[
+                Event::slot(0),
+                Event::tracking_id(61),
+                Event::x(20),
+                Event::y(300),
+            ],
+            at(1000),
+        )
+        .expect("edge contact should land");
+    let first = engine
+        .process_frame_at(&[Event::slot(0), Event::y(380)], at(1350))
+        .expect("vertical slide should step");
+    let drift = engine
+        .process_frame_at(&[Event::slot(0), Event::x(200), Event::y(450)], at(1400))
+        .expect("slide should drift sideways");
+
+    assert_eq!(first.slider_steps.len(), 1);
+    assert!(drift.passthrough.is_empty());
+    assert_eq!(drift.slider_steps.len(), 1);
+}
+
+#[test]
+fn edge_contact_landing_right_after_a_key_press_stays_pointer_input() {
+    let mut engine = left_slider_engine_with(EngineOptions::default());
+    let at = Duration::from_millis;
+    engine.record_key_press(at(800));
+
+    let typing = engine
+        .process_frame_at(
+            &[
+                Event::slot(0),
+                Event::tracking_id(70),
+                Event::x(20),
+                Event::y(300),
+            ],
+            at(1050),
+        )
+        .expect("edge contact should land while typing");
+    let typing_slide = engine
+        .process_frame_at(&[Event::slot(0), Event::y(600)], at(1500))
+        .expect("contact should slide");
+    engine
+        .process_frame_at(&[Event::slot(0), Event::tracking_id(-1)], at(1600))
+        .expect("contact should lift");
+
+    engine
+        .process_frame_at(
+            &[
+                Event::slot(0),
+                Event::tracking_id(71),
+                Event::x(20),
+                Event::y(300),
+            ],
+            at(1700),
+        )
+        .expect("edge contact should land after the lockout");
+    let slide = engine
+        .process_frame_at(&[Event::slot(0), Event::y(600)], at(2100))
+        .expect("contact should slide");
+
+    assert_eq!(
+        typing.passthrough,
+        vec![
+            Event::slot(0),
+            Event::tracking_id(70),
+            Event::x(20),
+            Event::y(300),
+        ]
+    );
+    assert!(typing_slide.slider_steps.is_empty());
+    assert!(slide.passthrough.is_empty());
+    assert_eq!(slide.slider_steps.len(), 4);
 }

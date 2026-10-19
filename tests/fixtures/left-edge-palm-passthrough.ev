@@ -1,0 +1,18 @@
+# A palm lands in the left edge zone and slides right. hid-multitouch flags it
+# with ABS_MT_TOOL_TYPE MT_TOOL_PALM (2), so it must reach libinput instead of
+# becoming a left-edge swipe.
+ABS_MT_SLOT 0
+ABS_MT_TRACKING_ID 400
+ABS_MT_TOOL_TYPE 2
+ABS_MT_POSITION_X 20
+ABS_MT_POSITION_Y 300
+SYN_REPORT 0
+
+ABS_MT_SLOT 0
+ABS_MT_POSITION_X 220
+ABS_MT_POSITION_Y 310
+SYN_REPORT 50000
+
+ABS_MT_SLOT 0
+ABS_MT_TRACKING_ID -1
+SYN_REPORT 100000

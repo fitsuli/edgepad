@@ -1080,6 +1080,7 @@ fn proxy(args: &ProxyArgs) -> Result<(), String> {
     print_recognition_profile(&profile);
     let summary = run_proxy(&ProxyRunConfig {
         device_path: device,
+        input_root: args.input_root.clone(),
         limit: ProxyRunLimit::Frames {
             frame_boundaries: args.frames,
             stop_after_limit: match args.mode {
@@ -1281,6 +1282,7 @@ fn run_daemon_proxy_with_startup_retry(
             run_proxy_with_gesture_handler_and_ready(
                 &ProxyRunConfig {
                     device_path,
+                    input_root: input_root.to_path_buf(),
                     limit: ProxyRunLimit::UntilStopped {
                         stop: stop.clone(),
                         idle_drain_timeout: DAEMON_IDLE_DRAIN_TIMEOUT,
@@ -1541,13 +1543,16 @@ fn edge_widths_label(widths: EdgeWidths) -> String {
 fn print_recognition_profile(profile: &RecognitionProfile) {
     println!("profile: {}", profile.source_label());
     println!(
-        "profile_settings: edge_widths={} tap_min_duration_ms={} tap_max_duration_ms={} double_tap_timeout_ms={} double_tap_max_distance={:.3} swipe_min_distance={:.3} sliders={}",
+        "profile_settings: edge_widths={} tap_min_duration_ms={} tap_max_duration_ms={} double_tap_timeout_ms={} double_tap_max_distance={:.3} swipe_min_distance={:.3} slider_delay_ms={} side_edge_top_dead_zone={:.3} typing_lockout_ms={} sliders={}",
         edge_widths_label(profile.edge_widths),
         profile.engine_options.tap_min_duration.as_millis(),
         profile.engine_options.tap_max_duration.as_millis(),
         profile.engine_options.double_tap_timeout.as_millis(),
         profile.engine_options.double_tap_max_distance,
         profile.engine_options.swipe_min_distance,
+        profile.engine_options.slider_delay.as_millis(),
+        profile.engine_options.side_edge_top_dead_zone,
+        profile.engine_options.typing_lockout.as_millis(),
         profile.slider_specs.len()
     );
 }

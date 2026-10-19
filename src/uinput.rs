@@ -7,12 +7,12 @@
 use crate::core::Capabilities;
 use crate::raw::{
     is_pointer_button_code, RawEvent, RawOutputSink, ABS_MT_POSITION_X, ABS_MT_POSITION_Y,
-    ABS_MT_SLOT, ABS_MT_TRACKING_ID, ABS_X, ABS_Y, BTN_TOOL_DOUBLETAP, BTN_TOOL_FINGER,
-    BTN_TOOL_QUADTAP, BTN_TOOL_QUINTTAP, BTN_TOOL_TRIPLETAP, BTN_TOUCH,
+    ABS_MT_SLOT, ABS_MT_TOOL_TYPE, ABS_MT_TRACKING_ID, ABS_X, ABS_Y, BTN_TOOL_DOUBLETAP,
+    BTN_TOOL_FINGER, BTN_TOOL_QUADTAP, BTN_TOOL_QUINTTAP, BTN_TOOL_TRIPLETAP, BTN_TOUCH,
 };
 use evdev::{
     raw_stream::RawDevice, uinput::VirtualDevice, AbsInfo, AbsoluteAxisCode, AttributeSet,
-    InputEvent, KeyCode, PropType, UinputAbsSetup,
+    InputEvent, InputId, KeyCode, PropType, UinputAbsSetup,
 };
 use std::io;
 
@@ -70,6 +70,7 @@ pub struct PhysicalTouchpadAbsInfo {
     pub mt_tracking_id: Option<VirtualAbsAxis>,
     pub mt_position_x: VirtualAbsAxis,
     pub mt_position_y: VirtualAbsAxis,
+    pub mt_tool_type: Option<VirtualAbsAxis>,
 }
 
 impl PhysicalTouchpadAbsInfo {
@@ -97,6 +98,7 @@ impl PhysicalTouchpadAbsInfo {
                 capabilities.y.min,
                 capabilities.y.max,
             ),
+            mt_tool_type: None,
         }
     }
 
@@ -117,6 +119,7 @@ impl PhysicalTouchpadAbsInfo {
                 .unwrap_or(fallback.mt_position_x),
             mt_position_y: axis_from_abs_infos(&axes, ABS_MT_POSITION_Y)
                 .unwrap_or(fallback.mt_position_y),
+            mt_tool_type: axis_from_abs_infos(&axes, ABS_MT_TOOL_TYPE),
         }
     }
 }
@@ -141,6 +144,7 @@ fn axis_from_abs_infos(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VirtualTouchpadSpec {
     pub name: String,
+    pub input_id: Option<InputId>,
     pub properties: Vec<u16>,
     pub keys: Vec<u16>,
     pub absolute_axes: Vec<VirtualAbsAxis>,
@@ -165,12 +169,17 @@ impl VirtualTouchpadSpec {
             .map(|key| key.0)
             .filter(|code| is_pointer_button_code(*code))
             .collect();
-        Self::from_physical_device_info(
-            PhysicalTouchpadAbsInfo::from_raw_device(device, capabilities),
-            properties,
-            physical_buttons,
-            DEFAULT_VIRTUAL_TOUCHPAD_NAME,
-        )
+        // libinput treats a USB touchpad as external and then skips palm
+        // detection and disable-while-typing, so keep the physical identity.
+        Self {
+            input_id: Some(device.input_id()),
+            ..Self::from_physical_device_info(
+                PhysicalTouchpadAbsInfo::from_raw_device(device, capabilities),
+                properties,
+                physical_buttons,
+                DEFAULT_VIRTUAL_TOUCHPAD_NAME,
+            )
+        }
     }
 
     pub fn named(capabilities: Capabilities, name: impl Into<String>) -> Self {
@@ -190,8 +199,20 @@ impl VirtualTouchpadSpec {
         let abs_y = abs_info
             .abs_y
             .unwrap_or_else(|| abs_info.mt_position_y.with_code(ABS_Y));
+        let mut absolute_axes = vec![
+            abs_x,
+            abs_y,
+            abs_info.mt_slot,
+            abs_info
+                .mt_tracking_id
+                .unwrap_or_else(|| VirtualAbsAxis::new(ABS_MT_TRACKING_ID, 0, TRACKING_ID_MAX)),
+            abs_info.mt_position_x,
+            abs_info.mt_position_y,
+        ];
+        absolute_axes.extend(abs_info.mt_tool_type);
         Self {
             name: name.into(),
+            input_id: None,
             properties: vec![PropType::POINTER.0],
             keys: vec![
                 BTN_TOUCH,
@@ -201,16 +222,7 @@ impl VirtualTouchpadSpec {
                 BTN_TOOL_QUADTAP,
                 BTN_TOOL_QUINTTAP,
             ],
-            absolute_axes: vec![
-                abs_x,
-                abs_y,
-                abs_info.mt_slot,
-                abs_info
-                    .mt_tracking_id
-                    .unwrap_or_else(|| VirtualAbsAxis::new(ABS_MT_TRACKING_ID, 0, TRACKING_ID_MAX)),
-                abs_info.mt_position_x,
-                abs_info.mt_position_y,
-            ],
+            absolute_axes,
             misc: Vec::new(),
         }
     }
@@ -251,6 +263,9 @@ pub fn build_virtual_touchpad(spec: &VirtualTouchpadSpec) -> io::Result<VirtualD
         .name(&spec.name)
         .with_properties(&properties)?
         .with_keys(&keys)?;
+    if let Some(input_id) = &spec.input_id {
+        builder = builder.input_id(input_id.clone());
+    }
 
     for axis in &spec.absolute_axes {
         builder = builder.with_absolute_axis(&axis.to_uinput_abs_setup())?;

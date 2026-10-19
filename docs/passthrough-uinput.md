@@ -93,6 +93,12 @@ Those values can follow an edge-owned contact while another center contact is ac
 - a promoted contact stays passthrough until lift, and contacts that start while a physical button
   is held also pass through. The press cancels pending edge recognition, without rolling back
   slider steps that were already emitted;
+- edge ownership is one-finger only. A contact that lands while another is down passes through,
+  and a second finger promotes an edge-owned contact to passthrough the same way, so libinput sees
+  a normal two-finger gesture from that frame on;
+- a contact that hid-multitouch flags as `MT_TOOL_PALM` through `ABS_MT_TOOL_TYPE` is never
+  claimed. If it was already edge-owned, it is promoted to passthrough like a button press, so
+  libinput can reject it and no gesture or slider step follows;
 - tap-to-click has no physical button event, so edge taps remain edge gestures. Devices with
   separate buttons do not use button presses to preempt edge ownership;
 - `SYN_DROPPED` releases tracked virtual contacts, ignores the unreliable tail through the next
@@ -112,9 +118,12 @@ The Rust `evdev` crate's `VirtualDevice::emit(&[InputEvent])` appends `SYN_REPOR
   `INPUT_PROP_BUTTONPAD` for clickpads;
 - keys: `BTN_TOUCH`, `BTN_TOOL_FINGER`, `BTN_TOOL_DOUBLETAP`, `BTN_TOOL_TRIPLETAP`,
   `BTN_TOOL_QUADTAP`, `BTN_TOOL_QUINTTAP`, plus supported physical pointer buttons;
-- absolute axes: `ABS_X`, `ABS_Y`, `ABS_MT_SLOT`, `ABS_MT_TRACKING_ID`, `ABS_MT_POSITION_X`, `ABS_MT_POSITION_Y`.
+- absolute axes: `ABS_X`, `ABS_Y`, `ABS_MT_SLOT`, `ABS_MT_TRACKING_ID`, `ABS_MT_POSITION_X`, `ABS_MT_POSITION_Y`,
+  plus `ABS_MT_TOOL_TYPE` when the physical device has it.
 
-For live proxy mode, the virtual touchpad mirrors the physical device's input properties, physical
+For live proxy mode, the virtual touchpad mirrors the physical device's bus, vendor, product, and
+version, so libinput treats it as an internal touchpad and pairs it with the internal keyboard.
+Device discovery still skips it by name. It also mirrors the input properties, physical
 pointer-button capabilities, and absolute-axis value, min/max, fuzz, flat, and resolution where the
 physical device exposes them. This keeps compositor/libinput behavior close to the real device.
 Replay-only paths use captured metadata ranges and a conservative tracking-id range.

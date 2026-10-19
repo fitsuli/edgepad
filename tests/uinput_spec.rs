@@ -1,8 +1,8 @@
 use edgepad::core::{AxisRange, Capabilities};
 use edgepad::raw::{
-    ABS_MT_POSITION_X, ABS_MT_POSITION_Y, ABS_MT_SLOT, ABS_MT_TRACKING_ID, ABS_X, ABS_Y, BTN_LEFT,
-    BTN_RIGHT, BTN_TOOL_DOUBLETAP, BTN_TOOL_FINGER, BTN_TOOL_QUADTAP, BTN_TOOL_QUINTTAP,
-    BTN_TOOL_TRIPLETAP, BTN_TOUCH,
+    ABS_MT_POSITION_X, ABS_MT_POSITION_Y, ABS_MT_SLOT, ABS_MT_TOOL_TYPE, ABS_MT_TRACKING_ID, ABS_X,
+    ABS_Y, BTN_LEFT, BTN_RIGHT, BTN_TOOL_DOUBLETAP, BTN_TOOL_FINGER, BTN_TOOL_QUADTAP,
+    BTN_TOOL_QUINTTAP, BTN_TOOL_TRIPLETAP, BTN_TOUCH,
 };
 use edgepad::uinput::{PhysicalTouchpadAbsInfo, VirtualAbsAxis, VirtualTouchpadSpec};
 use evdev::PropType;
@@ -133,6 +133,7 @@ fn virtual_touchpad_spec_preserves_physical_abs_resolution_for_pointer_speed() {
                 flat: 8,
                 resolution: 42,
             },
+            mt_tool_type: Some(VirtualAbsAxis::new(ABS_MT_TOOL_TYPE, 0, 2)),
         },
         "edgepad mirrored touchpad",
     );
@@ -179,6 +180,7 @@ fn virtual_touchpad_spec_preserves_physical_abs_resolution_for_pointer_speed() {
                 flat: 8,
                 resolution: 42,
             },
+            VirtualAbsAxis::new(ABS_MT_TOOL_TYPE, 0, 2),
         ]
     );
 }

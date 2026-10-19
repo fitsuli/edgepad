@@ -1,0 +1,18 @@
+# A finger starts on the left edge and is claimed. The firmware then clears its
+# confidence bit: hid-multitouch keeps the tracking ID, switches the slot to
+# MT_TOOL_PALM, and lifts it in a later frame.
+ABS_MT_SLOT 0
+ABS_MT_TRACKING_ID 500
+ABS_MT_TOOL_TYPE 0
+ABS_MT_POSITION_X 20
+ABS_MT_POSITION_Y 300
+SYN_REPORT 0
+
+ABS_MT_SLOT 0
+ABS_MT_TOOL_TYPE 2
+ABS_MT_POSITION_Y 500
+SYN_REPORT 30000
+
+ABS_MT_SLOT 0
+ABS_MT_TRACKING_ID -1
+SYN_REPORT 60000

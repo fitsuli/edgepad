@@ -2,11 +2,11 @@ use std::time::Duration;
 
 use edgepad::core::{
     AxisRange, Capabilities, EdgeWidths, Engine, EngineOptions, GestureDirection, ResyncContact,
-    Zone, ZoneSet,
+    SliderAxis, SliderSpec, Zone, ZoneSet,
 };
 use edgepad::raw::{
-    route_raw_frame, route_recognition_deadline, route_resync_contacts, RawEvent, RawFrame,
-    BTN_LEFT, BTN_TOUCH, EV_KEY,
+    parse_raw_dump_file, route_raw_frame, route_recognition_deadline, route_resync_contacts,
+    RawEvent, RawFrame, BTN_LEFT, BTN_TOUCH, EV_KEY,
 };
 
 fn test_engine() -> Engine {
@@ -179,7 +179,7 @@ fn buttonpad_contact_and_press_in_same_frame_start_as_passthrough() {
 }
 
 #[test]
-fn route_raw_frame_keeps_only_center_slot_raw_events_in_mixed_frame() {
+fn route_raw_frame_keeps_edge_and_center_slots_that_land_together() {
     let mut engine = test_engine();
     let frame = RawFrame::new(vec![
         RawEvent::abs_mt_slot(0),
@@ -197,6 +197,10 @@ fn route_raw_frame_keeps_only_center_slot_raw_events_in_mixed_frame() {
     assert_eq!(
         routed.passthrough,
         vec![
+            RawEvent::abs_mt_slot(0),
+            RawEvent::abs_mt_tracking_id(100),
+            RawEvent::abs_mt_position_x(20),
+            RawEvent::abs_mt_position_y(300),
             RawEvent::abs_mt_slot(1),
             RawEvent::abs_mt_tracking_id(200),
             RawEvent::abs_mt_position_x(500),
@@ -373,6 +377,7 @@ fn route_resync_contacts_rebuilds_kernel_snapshot_as_passthrough() {
             tracking_id: 200,
             x: 20,
             y: 300,
+            tool_type: None,
         }],
     )
     .expect("resync snapshot should route");
@@ -388,4 +393,82 @@ fn route_resync_contacts_rebuilds_kernel_snapshot_as_passthrough() {
     );
     assert!(routed.gestures.is_empty());
     assert!(!routed.resync_required);
+}
+
+#[test]
+fn resync_restates_tool_type_because_virtual_slots_keep_the_previous_one() {
+    let mut engine = test_engine();
+    let routed = route_resync_contacts(
+        &mut engine,
+        &[
+            ResyncContact {
+                slot: 0,
+                tracking_id: 300,
+                x: 500,
+                y: 300,
+                tool_type: Some(0),
+            },
+            ResyncContact {
+                slot: 1,
+                tracking_id: 301,
+                x: 20,
+                y: 300,
+                tool_type: Some(2),
+            },
+        ],
+    )
+    .expect("resync snapshot should route");
+
+    assert_eq!(
+        routed.passthrough,
+        vec![
+            RawEvent::abs_mt_slot(0),
+            RawEvent::abs_mt_tracking_id(300),
+            RawEvent::abs_mt_tool_type(0),
+            RawEvent::abs_mt_position_x(500),
+            RawEvent::abs_mt_position_y(300),
+            RawEvent::abs_mt_slot(1),
+            RawEvent::abs_mt_tracking_id(301),
+            RawEvent::abs_mt_tool_type(2),
+            RawEvent::abs_mt_position_x(20),
+            RawEvent::abs_mt_position_y(300),
+        ]
+    );
+}
+
+#[test]
+fn recorded_edge_scroll_and_late_palm_fire_no_slider_steps_but_one_finger_flick_does() {
+    let dump = parse_raw_dump_file(include_str!("fixtures/zenbook-s14-scrolls-and-palm.raw.ev"))
+        .expect("recording excerpt should parse");
+    let mut engine = Engine::with_options(
+        dump.capabilities
+            .expect("recording has capability metadata"),
+        EdgeWidths {
+            left: 0.10,
+            right: 0.10,
+            top: 0.0,
+            bottom: 0.0,
+        },
+        vec![
+            SliderSpec {
+                zone: Zone::Left,
+                axis: SliderAxis::Vertical,
+                step: 0.03,
+            },
+            SliderSpec {
+                zone: Zone::Right,
+                axis: SliderAxis::Vertical,
+                step: 0.04,
+            },
+        ],
+        EngineOptions::default(),
+    );
+
+    let mut stepped_tracking_ids = Vec::new();
+    for frame in &dump.frames {
+        let routed = route_raw_frame(&mut engine, frame).expect("recorded frame should route");
+        stepped_tracking_ids.extend(routed.slider_steps.iter().map(|step| step.tracking_id));
+    }
+
+    assert_eq!(stepped_tracking_ids, vec![9380; 8]);
 }

@@ -37,6 +37,10 @@ pub mod core {
     pub const DEFAULT_DOUBLE_TAP_TIMEOUT_MS: u64 = 300;
     pub const DEFAULT_DOUBLE_TAP_MAX_DISTANCE: f32 = 0.04;
     pub const DEFAULT_SWIPE_MIN_DISTANCE: f32 = 0.02;
+    pub const DEFAULT_SLIDER_DELAY_MS: u64 = 400;
+    pub const DEFAULT_TYPING_LOCKOUT_MS: u64 = 300;
+    pub const DEFAULT_SIDE_EDGE_TOP_DEAD_ZONE: f32 = 0.0;
+    const MT_TOOL_PALM: i32 = 2;
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct AxisRange {
@@ -89,6 +93,7 @@ pub mod core {
         TrackingId(i32),
         X(i32),
         Y(i32),
+        ToolType(i32),
         SynDropped,
     }
 
@@ -107,6 +112,10 @@ pub mod core {
 
         pub fn y(y: i32) -> Self {
             Self::Y(y)
+        }
+
+        pub fn tool_type(tool_type: i32) -> Self {
+            Self::ToolType(tool_type)
         }
 
         pub fn syn_dropped() -> Self {
@@ -200,6 +209,9 @@ pub mod core {
         pub double_tap_max_distance: f32,
         pub double_tap_zones: ZoneSet,
         pub single_tap_zones: ZoneSet,
+        pub slider_delay: Duration,
+        pub side_edge_top_dead_zone: f32,
+        pub typing_lockout: Duration,
     }
 
     impl Default for EngineOptions {
@@ -212,6 +224,9 @@ pub mod core {
                 double_tap_max_distance: DEFAULT_DOUBLE_TAP_MAX_DISTANCE,
                 double_tap_zones: ZoneSet::default(),
                 single_tap_zones: ZoneSet::all(),
+                slider_delay: Duration::from_millis(DEFAULT_SLIDER_DELAY_MS),
+                side_edge_top_dead_zone: DEFAULT_SIDE_EDGE_TOP_DEAD_ZONE,
+                typing_lockout: Duration::from_millis(DEFAULT_TYPING_LOCKOUT_MS),
             }
         }
     }
@@ -230,6 +245,7 @@ pub mod core {
         pub tracking_id: i32,
         pub x: i32,
         pub y: i32,
+        pub tool_type: Option<i32>,
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -237,6 +253,7 @@ pub mod core {
         pub slot: i32,
         pub x: i32,
         pub y: i32,
+        pub tool_type: Option<i32>,
     }
 
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -306,10 +323,12 @@ pub mod core {
         current_y: Option<i32>,
         retained_x: Option<i32>,
         retained_y: Option<i32>,
+        tool_type: Option<i32>,
         began_in_frame: bool,
         started_at: Option<Duration>,
         tap_sequence_eligible: bool,
         tap_sequence_match: bool,
+        overlapped_other_contact: bool,
         slider_anchor: Option<f32>,
         held_events: Vec<Event>,
     }
@@ -327,10 +346,12 @@ pub mod core {
                 current_y: None,
                 retained_x: None,
                 retained_y: None,
+                tool_type: None,
                 began_in_frame: false,
                 started_at: None,
                 tap_sequence_eligible: true,
                 tap_sequence_match: false,
+                overlapped_other_contact: false,
                 slider_anchor: None,
                 held_events: Vec::new(),
             }
@@ -358,13 +379,15 @@ pub mod core {
     impl SlotState {
         fn finish_contact(&mut self) {
             // Type-B slots retain axis state after TRACKING_ID -1. Linux may
-            // suppress an unchanged X or Y when the next contact begins, so
-            // keep those values while clearing all contact-owned state.
+            // suppress an unchanged X, Y, or tool type when the next contact
+            // begins, so keep those values while clearing contact-owned state.
             let retained_x = self.retained_x;
             let retained_y = self.retained_y;
+            let tool_type = self.tool_type;
             *self = Self {
                 retained_x,
                 retained_y,
+                tool_type,
                 ..Self::default()
             };
         }
@@ -413,6 +436,7 @@ pub mod core {
         current_slot: i32,
         slots: Vec<SlotState>,
         pending_tap: Option<PendingTap>,
+        last_key_press: Option<Duration>,
     }
 
     impl Engine {
@@ -434,6 +458,7 @@ pub mod core {
                 pressed_physical_buttons: BTreeSet::new(),
                 slots: vec![SlotState::default(); slot_count],
                 pending_tap: None,
+                last_key_press: None,
             }
         }
 
@@ -485,8 +510,14 @@ pub mod core {
                 let slot = self.slot_mut(position.slot)?;
                 slot.retained_x = Some(position.x);
                 slot.retained_y = Some(position.y);
+                slot.tool_type = position.tool_type;
             }
             Ok(())
+        }
+
+        /// Use the same time domain as the touchpad frames.
+        pub fn record_key_press(&mut self, timestamp: Duration) {
+            self.last_key_press = self.last_key_press.max(Some(timestamp));
         }
 
         pub fn set_buttonpad(&mut self, buttonpad: bool) {
@@ -597,13 +628,19 @@ pub mod core {
                 slot.current_y = Some(contact.y);
                 slot.retained_x = Some(contact.x);
                 slot.retained_y = Some(contact.y);
+                slot.tool_type = contact.tool_type;
 
                 output.passthrough.extend([
                     Event::slot(contact.slot),
                     Event::tracking_id(contact.tracking_id),
-                    Event::x(contact.x),
-                    Event::y(contact.y),
                 ]);
+                // The virtual slot still holds whatever tool type it had last.
+                output
+                    .passthrough
+                    .extend(contact.tool_type.map(Event::tool_type));
+                output
+                    .passthrough
+                    .extend([Event::x(contact.x), Event::y(contact.y)]);
             }
 
             Ok(output)
@@ -618,6 +655,13 @@ pub mod core {
             if let Some(timestamp) = timestamp {
                 self.expire_pending_tap(timestamp, &mut output);
             }
+            // A finger lifting in the same frame was still down when this
+            // frame's new contacts landed.
+            let down_at_frame_start = self
+                .slots
+                .iter()
+                .map(|slot| slot.active)
+                .collect::<Vec<_>>();
 
             for event in frame.iter().copied() {
                 match event {
@@ -642,13 +686,22 @@ pub mod core {
                                 new_tracking_id: tracking_id,
                             });
                         }
-                        let another_contact_active = self.slots.iter().any(|slot| slot.active);
+                        let index = self.slot_index(slot)?;
+                        let another_contact_active = self.slots.iter().any(|slot| slot.active)
+                            || down_at_frame_start
+                                .iter()
+                                .enumerate()
+                                .any(|(other, down)| *down && other != index);
                         if another_contact_active {
                             for active_slot in self.slots.iter_mut().filter(|slot| slot.active) {
                                 active_slot.tap_sequence_eligible = false;
                                 active_slot.tap_sequence_match = false;
+                                active_slot.overlapped_other_contact = true;
                             }
                             self.flush_pending_tap(&mut output);
+                            // Edge gestures are one-finger only. A second finger
+                            // turns the edge contact into part of a scroll.
+                            output.passthrough.extend(self.promote_claimed_contacts());
                         }
                         let slot_state = self.slot_mut(slot)?;
                         slot_state.active = true;
@@ -659,6 +712,7 @@ pub mod core {
                         slot_state.started_at = timestamp;
                         slot_state.tap_sequence_eligible = !another_contact_active;
                         slot_state.tap_sequence_match = false;
+                        slot_state.overlapped_other_contact = another_contact_active;
                         slot_state.held_events.push(event);
                     }
                     Event::TrackingId(-1) => {
@@ -705,15 +759,43 @@ pub mod core {
                         }
                         self.route_event_for_current_slot(event, &mut output)?;
                     }
+                    Event::ToolType(tool_type) => {
+                        let slot_state = self.slot_mut(self.current_slot)?;
+                        slot_state.tool_type = Some(tool_type);
+                        match slot_state.ownership {
+                            Ownership::Passthrough => {
+                                self.push_passthrough_event_for_current_slot(event, &mut output)
+                            }
+                            // hid-multitouch flags a palm on the live contact
+                            // without lifting it, so hand it to libinput to reject.
+                            Ownership::Claimed(_) if tool_type == MT_TOOL_PALM => {
+                                output
+                                    .passthrough
+                                    .extend(self.promote_claimed_contact(self.current_slot)?);
+                            }
+                            Ownership::Claimed(_) | Ownership::Unknown => {}
+                        }
+                    }
                 }
 
                 if !self.slot(self.current_slot)?.began_in_frame {
                     self.decide_ownership_if_ready(&mut output)?;
-                    self.emit_slider_steps_if_ready(&mut output)?;
                 }
             }
 
             self.finalize_contacts_started_in_frame(&mut output)?;
+            // Step only after the whole frame, so a palm flag or second finger
+            // later in the frame still takes the contact away first. This also
+            // releases delayed steps on a frame that carries no motion.
+            for slot in self.caps.slot_min..=self.caps.slot_max {
+                if self.slid_off_axis_before_first_step(slot)? {
+                    output
+                        .passthrough
+                        .extend(self.promote_claimed_contact(slot)?);
+                } else {
+                    self.emit_slider_steps_if_ready(slot, timestamp, &mut output)?;
+                }
+            }
 
             Ok(output)
         }
@@ -744,7 +826,6 @@ pub mod core {
                 if should_finalize {
                     self.current_slot = slot_number;
                     self.decide_ownership_if_ready(output)?;
-                    self.emit_slider_steps_if_ready(output)?;
                 }
             }
             self.current_slot = previous_slot;
@@ -760,6 +841,10 @@ pub mod core {
             let slot = self.current_slot;
             match self.slot(slot)?.ownership {
                 Ownership::Claimed(zone) => {
+                    // A finger that lifts inside the delay was still a real slide.
+                    if !self.slid_off_axis_before_first_step(slot)? {
+                        self.emit_slider_steps_if_ready(slot, None, output)?;
+                    }
                     let releases_slider_zone = self.slider_for_zone(zone).is_some();
                     let options = self.options;
                     let capabilities = self.caps;
@@ -838,7 +923,7 @@ pub mod core {
         ) {
             match event {
                 Event::Slot(_) | Event::SynDropped => output.passthrough.push(event),
-                Event::TrackingId(_) | Event::X(_) | Event::Y(_) => {
+                Event::TrackingId(_) | Event::X(_) | Event::Y(_) | Event::ToolType(_) => {
                     // Filtering edge contacts also filters slot switches. The
                     // output slot can therefore differ from the physical slot;
                     // emitting a bare release here can leave the wrong finger down.
@@ -866,7 +951,11 @@ pub mod core {
                         && slot_state.start_y.is_some()
                     {
                         slot_state.ownership = Ownership::Passthrough;
-                        (std::mem::take(&mut slot_state.held_events), true)
+                        // The output slot may still hold a previous contact's
+                        // tool type, so restate this contact's latest one.
+                        let mut held_events = std::mem::take(&mut slot_state.held_events);
+                        held_events.extend(slot_state.tool_type.map(Event::tool_type));
+                        (held_events, true)
                     } else {
                         (Vec::new(), false)
                     }
@@ -914,42 +1003,41 @@ pub mod core {
         }
 
         fn promote_claimed_contacts(&mut self) -> Vec<Event> {
-            let mut events = Vec::new();
-            for index in 0..self.slots.len() {
-                let slot_number = self.caps.slot_min + index as i32;
-                let snapshot = {
-                    let slot = &mut self.slots[index];
-                    if !slot.active || !matches!(slot.ownership, Ownership::Claimed(_)) {
-                        None
-                    } else {
-                        match (slot.tracking_id, slot.current_x, slot.current_y) {
-                            (Some(tracking_id), Some(x), Some(y)) => {
-                                slot.ownership = Ownership::Passthrough;
-                                slot.slider_anchor = None;
-                                Some((tracking_id, x, y))
-                            }
-                            _ => None,
-                        }
-                    }
-                };
-
-                if let Some((tracking_id, x, y)) = snapshot {
-                    events.extend([
-                        Event::slot(slot_number),
-                        Event::tracking_id(tracking_id),
-                        Event::x(x),
-                        Event::y(y),
-                    ]);
-                }
-            }
-            events
+            (self.caps.slot_min..=self.caps.slot_max)
+                .flat_map(|slot| self.promote_claimed_contact(slot).unwrap_or_default())
+                .collect()
         }
 
+        fn promote_claimed_contact(&mut self, slot: i32) -> Result<Vec<Event>, SlotError> {
+            let slot_state = self.slot_mut(slot)?;
+            if !slot_state.active || !matches!(slot_state.ownership, Ownership::Claimed(_)) {
+                return Ok(Vec::new());
+            }
+            let (Some(tracking_id), Some(x), Some(y)) = (
+                slot_state.tracking_id,
+                slot_state.current_x,
+                slot_state.current_y,
+            ) else {
+                return Ok(Vec::new());
+            };
+            slot_state.ownership = Ownership::Passthrough;
+            slot_state.slider_anchor = None;
+
+            let mut events = vec![Event::slot(slot), Event::tracking_id(tracking_id)];
+            events.extend(slot_state.tool_type.map(Event::tool_type));
+            events.extend([Event::x(x), Event::y(y)]);
+            Ok(events)
+        }
+
+        /// Steps wait for `slider_delay` after the contact lands, so a second
+        /// finger or a palm flag can still take the contact away. `None`
+        /// releases them immediately.
         fn emit_slider_steps_if_ready(
             &mut self,
+            slot: i32,
+            timestamp: Option<Duration>,
             output: &mut FrameOutput,
         ) -> Result<(), SlotError> {
-            let slot = self.current_slot;
             let (zone, spec, position, tracking_id) = {
                 let slot_state = self.slot(slot)?;
                 let Ownership::Claimed(zone) = slot_state.ownership else {
@@ -967,11 +1055,17 @@ pub mod core {
                 (zone, spec, position, tracking_id)
             };
 
+            let slider_delay = self.options.slider_delay;
             let slot_state = self.slot_mut(slot)?;
             let Some(mut anchor) = slot_state.slider_anchor else {
                 slot_state.slider_anchor = Some(position);
                 return Ok(());
             };
+            if let (Some(started_at), Some(timestamp)) = (slot_state.started_at, timestamp) {
+                if timestamp < started_at.saturating_add(slider_delay) {
+                    return Ok(());
+                }
+            }
 
             if (position - anchor).abs() >= spec.step {
                 self.flush_pending_tap(output);
@@ -1021,17 +1115,48 @@ pub mod core {
                 .find(|slider| slider.zone == zone)
         }
 
+        /// A diagonal drag from the edge is pointer motion. Handing it back
+        /// before the first step keeps the cursor from freezing under it.
+        fn slid_off_axis_before_first_step(&self, slot: i32) -> Result<bool, SlotError> {
+            let slot_state = self.slot(slot)?;
+            let Ownership::Claimed(zone) = slot_state.ownership else {
+                return Ok(false);
+            };
+            let Some(spec) = self.slider_for_zone(zone) else {
+                return Ok(false);
+            };
+            Ok(slot_state.contact_phase == ContactPhase::Motion
+                && moved_across_slider(spec.axis, slot_state))
+        }
+
+        fn landed_while_typing(&self, slot_state: &SlotState) -> bool {
+            match (slot_state.started_at, self.last_key_press) {
+                (Some(started_at), Some(pressed_at)) => {
+                    started_at.saturating_sub(pressed_at) < self.options.typing_lockout
+                }
+                _ => false,
+            }
+        }
+
         fn zone_for_current_slot(&self) -> Result<Option<Zone>, SlotError> {
             let slot_state = self.slot(self.current_slot)?;
-            if !slot_state.active || slot_state.start_x.is_none() || slot_state.start_y.is_none() {
+            let (Some(start_x), Some(start_y)) = (slot_state.start_x, slot_state.start_y) else {
+                return Ok(None);
+            };
+            if !slot_state.active
+                || slot_state.tool_type == Some(MT_TOOL_PALM)
+                || slot_state.overlapped_other_contact
+                || self.landed_while_typing(slot_state)
+            {
                 return Ok(None);
             }
-            let x = self.caps.x.normalize(slot_state.start_x.unwrap());
-            let y = self.caps.y.normalize(slot_state.start_y.unwrap());
+            let x = self.caps.x.normalize(start_x);
+            let y = self.caps.y.normalize(start_y);
+            let below_side_dead_zone = y >= self.options.side_edge_top_dead_zone;
 
-            let zone = if x < self.edges.left {
+            let zone = if x < self.edges.left && below_side_dead_zone {
                 Some(Zone::Left)
-            } else if x > 1.0 - self.edges.right {
+            } else if x > 1.0 - self.edges.right && below_side_dead_zone {
                 Some(Zone::Right)
             } else if y < self.edges.top {
                 Some(Zone::Top)
@@ -1239,6 +1364,10 @@ pub mod core {
                 && options.double_tap_max_distance <= 1.0,
             "double-tap distance must be > 0 and <= 1"
         );
+        assert!(
+            (0.0..1.0).contains(&options.side_edge_top_dead_zone),
+            "side-edge top dead zone must be >= 0 and < 1"
+        );
     }
 
     fn classify_gesture(
@@ -1318,6 +1447,28 @@ pub mod core {
                 .is_some_and(|duration| duration >= min_duration && duration < max_duration),
             _ => true,
         }
+    }
+
+    // More than half as far across the slider as along it, about 27 degrees.
+    // shortcut: compares raw units, so X and Y resolution must match (the
+    // Zenbook S14 reports 62 and 64 units/mm), carry ABS resolution in
+    // Capabilities once a supported touchpad differs much.
+    fn moved_across_slider(axis: SliderAxis, state: &SlotState) -> bool {
+        let (Some(start_x), Some(start_y), Some(x), Some(y)) = (
+            state.start_x,
+            state.start_y,
+            state.current_x,
+            state.current_y,
+        ) else {
+            return false;
+        };
+        let dx = (x - start_x).abs();
+        let dy = (y - start_y).abs();
+        let (along, across) = match axis {
+            SliderAxis::Horizontal => (dx, dy),
+            SliderAxis::Vertical => (dy, dx),
+        };
+        across * 2 > along
     }
 
     fn slider_position(caps: Capabilities, axis: SliderAxis, state: &SlotState) -> Option<f32> {
@@ -1415,6 +1566,7 @@ pub mod replay {
                     Event::TrackingId(_) => stats.tracking_ends += 1,
                     Event::X(_) => stats.x_events += 1,
                     Event::Y(_) => stats.y_events += 1,
+                    Event::ToolType(_) => {}
                     Event::SynDropped => stats.syn_dropped_events += 1,
                 }
             }
@@ -1487,6 +1639,11 @@ pub mod replay {
                 "ABS_MT_POSITION_Y" => {
                     current.push(Event::y(parse_i32_value(line_number, name, parts.next())?))
                 }
+                "ABS_MT_TOOL_TYPE" => current.push(Event::tool_type(parse_i32_value(
+                    line_number,
+                    name,
+                    parts.next(),
+                )?)),
                 _ => {
                     return Err(ReplayError::UnknownEvent {
                         line: line_number,

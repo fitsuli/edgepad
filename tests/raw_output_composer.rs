@@ -83,7 +83,7 @@ fn compose_frame_does_not_leak_touch_or_abs_xy_for_claimed_edge_slot() {
 }
 
 #[test]
-fn compose_frame_uses_center_slot_for_legacy_state_when_raw_abs_xy_belong_to_edge_slot() {
+fn compose_frame_reports_two_fingers_when_edge_and_center_contacts_land_together() {
     let mut engine = test_engine();
     let mut composer = RawOutputComposer::new(test_capabilities());
 
@@ -108,14 +108,18 @@ fn compose_frame_uses_center_slot_for_legacy_state_when_raw_abs_xy_belong_to_edg
     assert_eq!(
         output,
         vec![
+            RawEvent::abs_mt_slot(0),
+            RawEvent::abs_mt_tracking_id(100),
+            RawEvent::abs_mt_position_x(20),
+            RawEvent::abs_mt_position_y(300),
             RawEvent::abs_mt_slot(1),
             RawEvent::abs_mt_tracking_id(200),
             RawEvent::abs_mt_position_x(520),
             RawEvent::abs_mt_position_y(320),
             RawEvent::btn_touch(true),
-            RawEvent::btn_tool_finger(true),
-            RawEvent::abs_x(520),
-            RawEvent::abs_y(320),
+            RawEvent::btn_tool_doubletap(true),
+            RawEvent::abs_x(20),
+            RawEvent::abs_y(300),
         ]
     );
 }
@@ -153,7 +157,7 @@ fn compose_frame_releases_legacy_state_when_last_passthrough_contact_ends() {
 }
 
 #[test]
-fn passthrough_release_carries_slot_context_after_claimed_slot_switch() {
+fn edge_contact_landing_after_center_contact_stays_visible_after_center_release() {
     let mut engine = test_engine();
     let mut composer = RawOutputComposer::new(test_capabilities());
 
@@ -193,8 +197,8 @@ fn passthrough_release_carries_slot_context_after_claimed_slot_switch() {
         vec![
             RawEvent::abs_mt_slot(1),
             RawEvent::abs_mt_tracking_id(-1),
-            RawEvent::btn_touch(false),
-            RawEvent::btn_tool_finger(false),
+            RawEvent::btn_tool_doubletap(false),
+            RawEvent::btn_tool_finger(true),
         ]
     );
 }
