@@ -1,0 +1,18 @@
+# Asus Zenbook S14 (UX5406SA): volume on the left edge, brightness on the right.
+device = "auto"
+edge_width = 0.07
+slider_delay_ms = 300
+side_edge_top_dead_zone = 0.167
+typing_lockout_ms = 300
+
+[[sliders]]
+zone = "left"
+step = 0.03
+up = ["edgepad-keys", "volume-up"]
+down = ["edgepad-keys", "volume-down"]
+
+[[sliders]]
+zone = "right"
+step = 0.075
+up = ["edgepad-keys", "brightness-up"]
+down = ["edgepad-keys", "brightness-down"]
